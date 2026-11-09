@@ -107,8 +107,17 @@ function pitLanding(pit, pad, k) {
   pit.toZ = padCenterZ(pad)
 }
 
-/** Their right hand, at the character's size (PitBottle.handPosition). */
+/**
+ * Their right hand: the posed hand bone once their avatar is drawn (RemotePlayers keeps
+ * r.hand up to date), else where PitBottle.handPosition puts it.
+ */
 function handPosition(r, pit) {
+  if (r.handOk) {
+    pit.fromX = r.hand.x
+    pit.fromY = r.hand.y
+    pit.fromZ = r.hand.z
+    return
+  }
   const p = r.position
   const fx = Math.sin(r.yaw)
   const fz = Math.cos(r.yaw)
@@ -126,7 +135,9 @@ function startHop(r, pit) {
     pit.arc = 1.3
     pit.roll = 0
     r.motion.tossTime = 0
+    r.motion.trainHops = 0
   } else {
+    r.motion.trainHops += 1
     pit.fromX = pit.toX
     pit.fromY = pit.toY
     pit.fromZ = pit.toZ
@@ -140,12 +151,14 @@ function startHop(r, pit) {
   pit.toZ += (Math.random() - 0.5) * 1.6
   pit.t = 0
   pit.hopping = true
+  r.motion.repTime = 0
 }
 
 /** Advances their pit bottle; it sits in their hand between tosses. */
 function updatePit(r, training, delta) {
   const pit = r.pit
   if (!training) {
+    r.handOk = false
     pit.pad = -1
     pit.step = -1
     pit.hopping = false
@@ -158,8 +171,13 @@ function updatePit(r, training, delta) {
     pit.pad = padAt(r.position.x, r.position.z, 0.6)
     pit.step = -1
     pit.hopping = false
+    // Just arrived: the first rep tosses a fresh bottle.
+    r.motion.trainHops = 6
+    r.motion.repTime = 0
     if (pit.pad < 0) return
   }
+  r.motion.repTime += delta
+  r.motion.interval = r.repGap ? r.repGap / 1000 : 0.6
   if (!pit.hopping && pit.rest <= 0 && r.pendingReps > 0) {
     r.pendingReps -= 1
     startHop(r, pit)

@@ -20,6 +20,7 @@ import { fmt } from '@shared/format'
 import { baseGain, bottleById, gainRoom, isPickupStair, pickupValue, zoneIndexAt } from '@shared/logic'
 import { LAUNCH, STAIR, stairCenterZ, stairIndexAtZ, stairTopY } from '@shared/world'
 
+import { remotePlayers } from '../../net/remotePlayers'
 import { getGame, useGame } from '../../store/game'
 import { sfx } from '../audio'
 import BottleModel from '../BottleModel'
@@ -517,6 +518,13 @@ function ThrowController() {
     updateRoll(sim.rollLevel, sim.fromX, sim.fromY, sim.fromZ)
   }
 
+  /** Is the avatar's hand posed (near the player)? Else the wind-up follows a fixed path. */
+  const handNearPlayer = () => {
+    const h = runtime.handPos
+    const p = runtime.playerPos
+    return Math.abs(h.x - p.x) + Math.abs(h.z - p.z) < 3 && h.y > p.y
+  }
+
   const startThrow = (plan) => {
     const b = bottleById(plan.bottleId)
     sim.plan = plan
@@ -600,11 +608,18 @@ function ThrowController() {
           // Pull back behind the shoulder, then forward to the release point.
           const k = Math.min(sim.t / THROW_WINDUP, 1)
           group.visible = true
-          group.position.set(sim.toX, sim.toY + k * 0.3, sim.toZ + Math.sin(Math.PI * k) * 0.6)
+          if (handNearPlayer()) group.position.copy(runtime.handPos)
+          else group.position.set(sim.toX, sim.toY + k * 0.3, sim.toZ + Math.sin(Math.PI * k) * 0.6)
           group.rotation.set(-Math.sin(Math.PI * k) * 0.8, 0, 0)
           group.scale.setScalar(BOTTLE_SCALE)
         }
         if (sim.t >= THROW_WINDUP) {
+          // Released from the hand, wherever the animation has it now.
+          if (handNearPlayer()) {
+            sim.toX = runtime.handPos.x
+            sim.toY = runtime.handPos.y - 0.3
+            sim.toZ = runtime.handPos.z
+          }
           sfx.throw()
           sfx.rollStart({ size: sim.radius / 0.35, family: sim.family })
           sim.phase = 'flight'
@@ -822,6 +837,16 @@ function GhostBottles() {
       let y = LAUNCH.h + 1.6 * PLAYER_SCALE
       let z = LAUNCH.z - 0.4 * PLAYER_SCALE
       let roll = 0
+      let px = x
+      if (t <= THROW_WINDUP) {
+        // Winding up: the bottle is in their hand (the remote loop keeps `hand` current).
+        const hand = remotePlayers.get(sid)?.hand
+        if (hand && Math.abs(hand.z - z) < 3) {
+          px = hand.x
+          y = hand.y
+          z = hand.z
+        }
+      }
       if (t > THROW_WINDUP) {
         let at = THROW_WINDUP
         let stair = -1
@@ -846,7 +871,7 @@ function GhostBottles() {
         }
       }
       // The glass geometry stands on its base; centre it before tumbling.
-      _dummy.position.set(x, y, z)
+      _dummy.position.set(px, y, z)
       _dummy.rotation.set(roll, 0, Math.PI / 2)
       _dummy.scale.setScalar(BOTTLE_SCALE)
       _dummy.updateMatrix()

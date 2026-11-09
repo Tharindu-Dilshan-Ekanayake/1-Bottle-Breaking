@@ -12,6 +12,8 @@ import {
   Vector3,
 } from 'three'
 
+import { THROW_WINDUP, TRAIN_INTERVAL } from '@shared/balance'
+
 import { BACK_BONE, HAT_BONE, NECK_OFFSET_BONE, PART_SLOTS, WORN_SLOTS } from '../bloxity/avatarAssets'
 
 /**
@@ -78,6 +80,8 @@ export function collectRig(root) {
     detail: true,
     /** The six body parts as one skinned mesh (mergeBody), or null. */
     merged: null,
+    /** Where the six parts were taken from while merged: [mesh, parent] pairs. */
+    detached: [],
   }
 
   const meshBySlot = new Map(
@@ -112,6 +116,8 @@ export function collectRig(root) {
         origPos: bone.position.clone(),
         origQuat: bone.quaternion.clone(),
         origScale: bone.scale.clone(),
+        /** What applyProportions does to it (decided once, not by name every frame). */
+        kind: boneKind(bone.name),
       }
     }
 
@@ -341,7 +347,15 @@ export function mergeBody(rig) {
   rig.root.updateMatrixWorld(true)
   mesh.computeBoundingSphere()
   mesh.boundingSphere.radius *= 1.5
-  for (const part of meshes) part.visible = false
+  // The six come out of the scene graph while merged: hidden, they'd still have their
+  // matrices updated every frame.
+  for (const part of meshes) {
+    part.visible = false
+    if (part.parent) {
+      rig.detached.push([part, part.parent])
+      part.parent.remove(part)
+    }
+  }
   rig.merged = mesh
   return mesh
 }
@@ -353,6 +367,8 @@ export function unmergeBody(rig) {
   mesh.parent?.remove(mesh)
   mesh.geometry.dispose()
   rig.merged = null
+  for (const [part, parent] of rig.detached) parent.add(part)
+  rig.detached.length = 0
   for (const part of rig.skinnedMeshes) part.visible = true
 }
 
@@ -670,43 +686,60 @@ export function applyProportions(rig, proportions) {
   // Overall height is a scale on the character root, not on a bone.
   rig.root.scale.set(1, height, 1)
 
-  for (const bone of skeleton.bones) {
+  const bones = skeleton.bones
+  for (let i = 0; i < bones.length; i += 1) {
+    const bone = bones[i]
     const rest = rig.bones[bone.name]
     if (!rest) continue
 
-    const { origScale, origPos, origQuat } = rest
+    const { origScale, origPos, origQuat, kind } = rest
     bone.position.copy(origPos)
     bone.quaternion.copy(origQuat)
     bone.scale.copy(origScale)
 
-    const name = bone.name
-
-    if (name.startsWith('Arm')) {
+    if (kind === KIND_ARM || kind === KIND_SHOULDER) {
       bone.scale.y = origScale.y * armLength
       // Not in the SDK preview: widen the shoulders by pushing the arm roots out.
-      if (name === 'ArmL_Offset' || name === 'ArmR_Offset') {
-        bone.position.x = origPos.x * shoulderWidth
-      }
-    } else if (name === NECK_OFFSET_BONE) {
+      if (kind === KIND_SHOULDER) bone.position.x = origPos.x * shoulderWidth
+    } else if (kind === KIND_NECK) {
       // Keeps the head sitting on the neck as height/headScale change, then applies
       // neckHeight against the bind-pose offset.
       bone.position.y += (height - headScale) * origPos.y
       bone.position.y += rig.neckOffsetBindY * (neckHeight - 1) * 0.8
-    } else if (name === HAT_BONE) {
+    } else if (kind === KIND_HEAD) {
       // Divided by height so the head stays uniform inside the stretched root.
       bone.scale.set(
         origScale.x * headScale,
         origScale.y * (headScale / height),
         origScale.z * headScale,
       )
-    } else if (name === BACK_BONE) {
+    } else if (kind === KIND_CHEST) {
       // Not in the SDK preview: torso width.
       bone.scale.x = origScale.x * torsoScaleX
-    } else if (name === 'LegL_Offset' || name === 'LegR_Offset') {
+    } else if (kind === KIND_HIP) {
       // Not in the SDK preview: leg splay, mirrored about the rig centre.
       bone.position.x = origPos.x * legOffsetX
     }
   }
+}
+
+// What applyProportions does to each bone, by name.
+const KIND_NONE = 0
+const KIND_ARM = 1
+const KIND_SHOULDER = 2
+const KIND_NECK = 3
+const KIND_HEAD = 4
+const KIND_CHEST = 5
+const KIND_HIP = 6
+
+function boneKind(name) {
+  if (name === 'ArmL_Offset' || name === 'ArmR_Offset') return KIND_SHOULDER
+  if (name.startsWith('Arm')) return KIND_ARM
+  if (name === NECK_OFFSET_BONE) return KIND_NECK
+  if (name === HAT_BONE) return KIND_HEAD
+  if (name === BACK_BONE) return KIND_CHEST
+  if (name === 'LegL_Offset' || name === 'LegR_Offset') return KIND_HIP
+  return KIND_NONE
 }
 
 const NO_PROPORTIONS = Object.freeze({})
@@ -782,6 +815,178 @@ const WEIGHT_SHIFT = 0.1
 const WEIGHT_SHIFT_RATE = 1.25
 const BREATH_RATE = 1.6
 
+/* ---------------------------------------------------------------------------
+ * Throw and training: keyed poses with easing
+ *
+ * Both actions are short sequences of full-body key poses, blended pose to pose with
+ * easing curves (no linear snaps). A pose is CHANNELS numbers (see addPose); the tables
+ * are built once, and sampling writes into a module scratch array, so nothing allocates
+ * per frame. Remote players are posed by the same code from the synced action time, so
+ * they throw and train exactly as their owner sees it.
+ * ------------------------------------------------------------------------- */
+
+const CHANNELS = 16
+const CH = {
+  armR1: 0, armR1s: 1, armR2: 2, armL1: 3, armL1s: 4, armL2: 5, spine: 6, spineTw: 7, spineSway: 8,
+  neck: 9, neckTw: 10, legL1: 11, legL2: 12, legR1: 13, legR2: 14, bob: 15,
+}
+function pose(values) {
+  const out = new Float32Array(CHANNELS)
+  for (const [key, v] of Object.entries(values)) out[CH[key]] = v
+  return out
+}
+const _target = new Float32Array(CHANNELS)
+
+/** Adds pose `p` at weight `w` (swing / sway / twist per bone); returns its body bob. */
+function addPose(p, w) {
+  add('ArmR1', w, p[0], p[1])
+  add('ArmR2', w, p[2])
+  add('ArmL1', w, p[3], p[4])
+  add('ArmL2', w, p[5])
+  add('Spine1', w, p[6], p[8], p[7])
+  add('Neck1', w, p[9], 0, p[10])
+  add('LegL1', w, p[11])
+  add('LegL2', w, p[12])
+  add('LegR1', w, p[13])
+  add('LegR2', w, p[14])
+  return p[15] * w
+}
+
+/** out = a -> b at eased progress e. */
+function blendPose(out, a, b, e) {
+  for (let i = 0; i < CHANNELS; i += 1) out[i] = a[i] + (b[i] - a[i]) * e
+  return out
+}
+
+const clamp01 = (x) => (x < 0 ? 0 : x > 1 ? 1 : x)
+const easeOutCubic = (x) => 1 - (1 - x) ** 3
+const easeInCubic = (x) => x * x * x
+const easeInOutSine = (x) => 0.5 - 0.5 * Math.cos(Math.PI * x)
+const smoothstep = (x) => x * x * (3 - 2 * x)
+
+const REST = pose({})
+
+/* The throw (right arm, overhand), facing down the stairs. The bottle leaves the hand
+ * at THROW_WINDUP (shared with the staircase's flight start), so the whip lands on it. */
+const T_COIL = 0.13
+const T_HOLD = 0.24
+const T_RELEASE = THROW_WINDUP
+const T_FOLLOW = T_RELEASE + 0.24
+const T_SETTLE = T_FOLLOW + 0.4
+/** Crouch, lean back, twist away, bottle drawn back over the shoulder, left arm aiming. */
+const THROW_COIL = pose({
+  armR1: -3.0, armR1s: 0.2, armR2: -1.35, armL1: -1.35, armL1s: 0.25, armL2: -0.3, spine: 0.24, spineTw: 0.6,
+  spineSway: 0.06, neckTw: -0.45, legL1: -0.4, legL2: 0.5, legR1: -0.2, legR2: 0.65, bob: -0.2,
+})
+/** The brief hold at the top: coiled a little further. */
+const THROW_HOLD = pose({
+  armR1: -3.25, armR1s: 0.22, armR2: -1.45, armL1: -1.45, armL1s: 0.3, armL2: -0.35, spine: 0.28, spineTw: 0.68,
+  spineSway: 0.07, neckTw: -0.52, legL1: -0.45, legL2: 0.55, legR1: -0.22, legR2: 0.7, bob: -0.22,
+})
+/** Release: arm out in front at full stretch, weight onto the front foot, hips through. */
+const THROW_RELEASE = pose({
+  armR1: -1.45, armR1s: 0.05, armR2: -0.1, armL1: -0.25, armL1s: -0.45, armL2: -0.7, spine: -0.36, spineTw: -0.45,
+  spineSway: -0.04, neck: 0.12, neckTw: 0.3, legL1: -0.6, legL2: 0.35, legR1: 0.42, legR2: 0.3, bob: -0.06,
+})
+/** Follow-through: arm across the body, torso round, back leg kicking up in a hop. */
+const THROW_FOLLOW = pose({
+  armR1: -0.35, armR1s: 0.65, armR2: -0.35, armL1: 0.3, armL1s: -0.2, armL2: -0.35, spine: -0.5, spineTw: -0.78,
+  spineSway: -0.06, neck: 0.25, neckTw: 0.5, legL1: -0.5, legL2: 0.3, legR1: 0.9, legR2: 1.0, bob: 0.1,
+})
+/** Settled, watching it go (then the idle stance takes over). */
+const THROW_SETTLE = pose({
+  armR1: -0.15, armR1s: 0.12, armR2: -0.1, armL1: -0.05, armL2: -0.1, spine: -0.1, spineTw: -0.15, neck: 0.1,
+  neckTw: 0.1, legL1: -0.1, legL2: 0.15, legR1: 0.05, legR2: 0.1, bob: -0.02,
+})
+
+/** The throw's pose `t` seconds after it started. */
+function throwPose(out, t) {
+  if (t < T_COIL) return blendPose(out, REST, THROW_COIL, easeOutCubic(clamp01(t / T_COIL)))
+  if (t < T_HOLD) return blendPose(out, THROW_COIL, THROW_HOLD, smoothstep((t - T_COIL) / (T_HOLD - T_COIL)))
+  // The whip accelerates into the release.
+  if (t < T_RELEASE) return blendPose(out, THROW_HOLD, THROW_RELEASE, easeInCubic((t - T_HOLD) / (T_RELEASE - T_HOLD)))
+  if (t < T_FOLLOW) return blendPose(out, THROW_RELEASE, THROW_FOLLOW, easeOutCubic((t - T_RELEASE) / (T_FOLLOW - T_RELEASE)))
+  return blendPose(out, THROW_FOLLOW, THROW_SETTLE, easeInOutSine(clamp01((t - T_FOLLOW) / (T_SETTLE - T_FOLLOW))))
+}
+
+/** How much of the throw layer shows: all of it, then it eases back into idle. */
+function throwEnvelope(t) {
+  return 1 - smoothstep(clamp01((t - T_SETTLE) / 0.45))
+}
+
+/* Training (right arm, underhand), facing the pit. A fresh bottle is tossed every few
+ * reps (PitBottle: onto the first step, then one hop per rep down to the floor); in
+ * between you crouch, hands on knees, and bob with each bounce; as the last hop lands
+ * you straighten, take the next bottle and swing back, timed to the next rep. Every
+ * duration scales with the rep interval (Quick Reps makes it all snappier). */
+/** Bottle held in front, ready. */
+const TRAIN_READY = pose({
+  armR1: -0.9, armR2: -0.9, armL1: -0.3, armL1s: 0.2, spine: -0.08, neck: 0.15,
+  legL1: -0.12, legL2: 0.25, legR1: -0.12, legR2: 0.25, bob: -0.04,
+})
+/** Knees bent, arm swung back low: about to toss. */
+const TRAIN_BACK = pose({
+  armR1: 0.6, armR1s: -0.08, armR2: -0.2, armL1: -0.6, armL1s: 0.25, armL2: -0.2, spine: -0.22, spineTw: 0.2,
+  neck: 0.2, neckTw: -0.1, legL1: -0.35, legL2: 0.7, legR1: -0.35, legR2: 0.7, bob: -0.14,
+})
+/** Release: arm through to the front, knees driving up. */
+const TRAIN_RELEASE = pose({
+  armR1: -1.5, armR2: -0.3, armL1: -0.2, armL1s: 0.15, spine: -0.05, spineTw: -0.15, neck: 0.2,
+  legL1: -0.1, legL2: 0.2, legR1: -0.1, legR2: 0.2,
+})
+/** Follow-through: arm high, up on the toes, watching it fly. */
+const TRAIN_FOLLOW = pose({
+  armR1: -2.1, armR2: -0.4, armL1: 0.1, armL1s: 0.3, spine: 0.06, spineTw: -0.2, neck: 0.25, bob: 0.04,
+})
+/** Hands on knees, watching the bottle bounce down. */
+const TRAIN_WATCH = pose({
+  armR1: -0.55, armR1s: 0.15, armR2: -0.5, armL1: -0.55, armL1s: -0.15, armL2: -0.5, spine: -0.45, neck: -0.25,
+  legL1: -0.3, legL2: 0.55, legR1: -0.3, legR2: 0.55, bob: -0.12,
+})
+/** PitBottle's hop time and floor rest: when the next fresh bottle can go. */
+const PIT_HOP = 0.42
+const PIT_REST = 0.3
+/** Hops down the pit (6 steps and the floor) before the next toss. */
+const PIT_HOPS = 6
+
+/**
+ * The training pose: `tossTime` since the last fresh toss, and from `motion` the time
+ * since the last rep (`repTime`), hops since the toss (`trainHops`; PIT_HOPS or more =
+ * the next rep tosses a new bottle) and the rep interval.
+ */
+function trainPose(out, motion, tossTime) {
+  const interval = motion.interval || TRAIN_INTERVAL
+  const s = Math.min(1, Math.max(0.55, interval / TRAIN_INTERVAL))
+  const t = tossTime / s
+  if (t < 0.55) {
+    if (t < 0.07) return blendPose(out, TRAIN_BACK, TRAIN_RELEASE, easeOutCubic(t / 0.07))
+    if (t < 0.22) return blendPose(out, TRAIN_RELEASE, TRAIN_FOLLOW, easeOutCubic((t - 0.07) / 0.15))
+    return blendPose(out, TRAIN_FOLLOW, TRAIN_WATCH, easeInOutSine((t - 0.22) / 0.33))
+  }
+  const rep = motion.repTime ?? 9
+  if ((motion.trainHops ?? PIT_HOPS) >= PIT_HOPS) {
+    // The last hop is landing: stand up, take the next bottle, swing back for the toss.
+    const tossAt = Math.max(interval, PIT_HOP + PIT_REST)
+    const back = Math.min(0.18, tossAt * 0.35)
+    if (rep < tossAt - back) blendPose(out, TRAIN_WATCH, TRAIN_READY, smoothstep(clamp01((rep - PIT_HOP * 0.6) / 0.25)))
+    else blendPose(out, TRAIN_READY, TRAIN_BACK, easeOutCubic(clamp01((rep - (tossAt - back)) / back)))
+    return out
+  }
+  // Watching: a little bob and nod with every bounce.
+  out.set(TRAIN_WATCH)
+  const beat = 0.35 * s
+  const bump = rep < beat ? Math.sin((Math.PI * rep) / beat) : 0
+  out[CH.bob] -= 0.05 * bump
+  out[CH.legL2] += 0.12 * bump
+  out[CH.legR2] += 0.12 * bump
+  out[CH.legL1] -= 0.06 * bump
+  out[CH.legR1] -= 0.06 * bump
+  out[CH.neck] += 0.12 * bump
+  out[CH.armR1] -= 0.25 * bump
+  out[CH.spine] -= 0.05 * bump
+  return out
+}
+
 /**
  * Poses the rig for the current motion state, as a blend of layers - walk, idle, air,
  * training toss, throw, landing - whose weights ease in and out, so nothing ever snaps
@@ -806,7 +1011,8 @@ export function animateRig(rig, motion) {
   st.ratio = lerp(st.ratio, ratioTarget, ease(12))
   st.air = lerp(st.air, grounded ? 0 : 1, ease(grounded ? 18 : 10))
   st.train = lerp(st.train, action === 'train' ? 1 : 0, ease(10))
-  st.throw = lerp(st.throw, action === 'throw' ? 1 : 0, ease(18))
+  // The throw plays out, then hands back to the idle stance while the bottle tumbles.
+  st.throw = lerp(st.throw, action === 'throw' ? throwEnvelope(actionTime) : 0, ease(18))
   st.cheer = lerp(st.cheer, cheer > 0 ? 1 : 0, ease(10))
   // Sprinting: a deeper lean, longer strides and pumping arms on top of the run.
   st.sprint = lerp(st.sprint || 0, sprint > 0 && speed > 0.5 ? 1 : 0, ease(6))
@@ -892,58 +1098,20 @@ export function animateRig(rig, motion) {
     add('Spine1', airW, -0.1)
   }
 
-  // --- Training: an underhand toss into the pit on every rep --------------------------
+  // --- Training: the underhand toss into the pit, then watching it bounce ------------
   if (st.train > 0.001) {
-    const w = st.train
-    const t = tossTime
-    let arm
-    if (t < 0.12) arm = lerp(-0.4, 0.9, t / 0.12)
-    else if (t < 0.34) arm = lerp(0.9, -1.8, (t - 0.12) / 0.22)
-    else arm = lerp(-1.8, -0.4, (t - 0.34) / 0.35)
-    const dip = t < 0.34 ? Math.sin((t / 0.34) * Math.PI) : 0
-    add('ArmR1', w, arm)
-    add('ArmR2', w, -0.35)
-    add('ArmL1', w, -0.3, -0.35)
-    add('Spine1', w, -0.18 - dip * 0.12, 0, dip * 0.15)
-    add('Neck1', w, 0.3)
-    add('LegL1', w, -0.2 * dip)
-    add('LegL2', w, 0.35 * dip)
-    add('LegR1', w, -0.2 * dip)
-    add('LegR2', w, 0.35 * dip)
-    bob -= w * dip * 0.06
+    const smooth = rig.trainPose || (rig.trainPose = new Float32Array(CHANNELS))
+    trainPose(_target, motion, tossTime)
+    // Lightly smoothed, so an early or late rep never snaps the body.
+    const k = ease(28)
+    for (let i = 0; i < CHANNELS; i += 1) smooth[i] += (_target[i] - smooth[i]) * k
+    bob += addPose(smooth, st.train)
   }
 
-  // --- Throw: twist and wind up behind, whip over the top, follow through ------------
+  // --- Throw: coil, whip, release, follow through, settle ------------------------------
   if (st.throw > 0.001) {
-    const w = st.throw
-    const t = actionTime
-    let arm
-    let turn
-    let lean
-    if (t < 0.28) {
-      const k = t / 0.28
-      arm = lerp(0, 1.2, k)
-      turn = lerp(0, 0.55, k)
-      lean = lerp(0, 0.15, k)
-    } else if (t < 0.42) {
-      const k = (t - 0.28) / 0.14
-      arm = lerp(1.2, -2.6, k)
-      turn = lerp(0.55, -0.6, k)
-      lean = lerp(0.15, -0.35, k)
-    } else {
-      const k = Math.min(1, (t - 0.42) / 0.5)
-      arm = lerp(-2.6, -1.1, k)
-      turn = lerp(-0.6, -0.15, k)
-      lean = lerp(-0.35, -0.12, k)
-    }
-    add('ArmR1', w, arm, 0.15)
-    add('ArmR2', w, -0.4)
-    add('ArmL1', w, -0.7, -0.4)
-    add('Spine1', w, lean, 0, turn)
-    add('Neck1', w, 0.1, 0, -turn * 0.6)
-    add('LegL1', w, -0.35)
-    add('LegL2', w, 0.2)
-    add('LegR1', w, 0.25)
+    throwPose(_target, actionTime)
+    bob += addPose(_target, st.throw)
   }
 
   // --- Cheer: both arms up, waving, little hops ----------------------------------------
