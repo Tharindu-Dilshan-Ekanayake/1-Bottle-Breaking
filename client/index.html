@@ -3,12 +3,27 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Power Per Click</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+    <meta name="theme-color" content="#2a8af5" />
+    <title>Bottle Tumble</title>
+    <meta name="description" content="Train, toss your bottle down endless stairs, and smash it for Power and Trophies." />
 
-    <!-- Bloxity SDK. Exposes itself as window.Legion.SDK.
-         Must load before the Vite entry script below. -->
-    <script src="https://sdk.bloxity.io/v1/legion-sdk.min.js"></script>
+    <!-- Open the SDK's connection early. Only the SDK host: it's the same in every
+         environment, unlike the API and CDN hosts, which come from the told environment
+         (src/bloxity/env.js) and are never written here. -->
+    <link rel="preconnect" href="https://sdk.bloxity.io" />
+
+    <!-- Boxity SDK (window.Legion.SDK). It reads window.BLOXITY_ENV (set by the host
+         page; in `vite dev`, injected above this tag) to pick its environment.
+
+         `async`, not blocking: sdk.bloxity.io serves it `no-cache`, so every load waits
+         on a CDN revalidation (~0.7 s before the first byte on a fast line, 2+ s on 4G),
+         and a blocking tag would hold the whole game behind that - past the 5 s
+         time-to-playable budget. What Boxity needs is kept: the SDK runs before any
+         Boxity request the game makes. Nothing talks to Boxity or the matchmaker until
+         waitForSDK() resolves and init() has run (src/bloxity/sdk.js, BloxityProvider,
+         net/connection.js), so every matchmaker request carries the player's party. -->
+    <script async src="https://sdk.bloxity.io/v1/legion-sdk.min.js"></script>
   </head>
   <body>
     <div id="root"></div>

@@ -107,3 +107,22 @@ export function safeCall(fn, ...args) {
     return undefined
   }
 }
+
+let resolveInitialized = () => {}
+const initialized = new Promise((resolve) => {
+  resolveInitialized = resolve
+})
+
+/** BloxityProvider calls this once `Legion.SDK.init()` has run. */
+export function markInitialized(sdk) {
+  resolveInitialized(sdk)
+}
+
+/**
+ * Resolves with the SDK once `init()` has run - what anything talking to Boxity's
+ * matchmaker must wait for, so its requests carry the player's party - or with null
+ * after `timeoutMs` (SDK blocked or unreachable: play on without it).
+ */
+export function whenInitialized(timeoutMs = DEFAULT_TIMEOUT_MS) {
+  return Promise.race([initialized, new Promise((resolve) => setTimeout(() => resolve(null), timeoutMs))])
+}

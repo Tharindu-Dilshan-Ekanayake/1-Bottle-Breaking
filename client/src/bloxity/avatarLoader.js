@@ -47,6 +47,15 @@ export function loadPartGLB(url) {
 }
 
 /**
+ * Loads a player's own uploaded character (same 22 bones as player.glb). Not cloned:
+ * each avatar clones it with SkeletonUtils.
+ * @returns {Promise<import('three').Object3D|null>}
+ */
+export function loadCharacterGLB(url) {
+  return cached(url, () => gltfLoader.loadAsync(url).then((gltf) => gltf.scene))
+}
+
+/**
  * Loads an accessory OBJ. Cloned per call, since the result is added to the scene
  * graph and would otherwise be reparented away from any other user of it.
  * @returns {Promise<import('three').Object3D|null>}

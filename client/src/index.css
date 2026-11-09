@@ -2,8 +2,16 @@
 
 :root {
   color-scheme: dark;
-  font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+  font-family: 'Fredoka One', system-ui, 'Segoe UI', Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
+  --ink: #1d1436;
+  --panel: rgba(29, 20, 64, 0.9);
+  --panel-edge: rgba(255, 255, 255, 0.14);
+  --power: #ffd23f;
+  --trophy: #ffb020;
+  --rebirth: #3ee0ff;
+  --pink: #ff5fa8;
+  --green: #3ddc84;
 }
 
 html,
@@ -12,10 +20,704 @@ body,
   height: 100%;
   margin: 0;
   overflow: hidden;
+  background: #86c8fb;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
-/* The R3F canvas fills its container; the HUD is absolutely positioned over it. */
 canvas {
   display: block;
   touch-action: none;
 }
+
+.font-game {
+  font-family: 'Fredoka One', 'Arial Rounded MT Bold', system-ui, sans-serif;
+  letter-spacing: 0.02em;
+}
+
+/* Chunky dark outline for text over the 3D scene. */
+.txt-outline {
+  text-shadow:
+    0 3px 0 var(--ink), 2px 2px 0 var(--ink), -2px 2px 0 var(--ink), 2px -2px 0 var(--ink),
+    -2px -2px 0 var(--ink), 2px 0 0 var(--ink), -2px 0 0 var(--ink), 0 -2px 0 var(--ink);
+}
+
+.txt-outline-sm {
+  text-shadow:
+    0 2px 0 var(--ink), 1px 1px 0 var(--ink), -1px 1px 0 var(--ink), 1px -1px 0 var(--ink),
+    -1px -1px 0 var(--ink);
+}
+
+.panel {
+  background:
+    radial-gradient(120% 60% at 50% 0%, rgba(124, 92, 255, 0.35), transparent 60%),
+    linear-gradient(180deg, rgba(56, 38, 120, 0.97), rgba(26, 18, 60, 0.97));
+  border: 4px solid var(--ink);
+  box-shadow:
+    inset 0 0 0 3px rgba(255, 255, 255, 0.12),
+    inset 0 3px 0 5px rgba(255, 255, 255, 0.06),
+    0 10px 0 rgba(0, 0, 0, 0.3),
+    0 24px 60px rgba(0, 0, 0, 0.45);
+}
+
+/* Coloured ribbon behind a panel title. */
+.ribbon {
+  position: relative;
+  padding: 4px 22px 6px;
+  border: 3px solid var(--ink);
+  border-radius: 14px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--rib, #7c5cff) 65%, white), var(--rib, #7c5cff));
+  box-shadow: inset 0 3px 0 rgba(255, 255, 255, 0.45), inset 0 -4px 0 rgba(0, 0, 0, 0.18), 0 4px 0 var(--ink);
+}
+
+.chip {
+  background: linear-gradient(180deg, rgba(44, 30, 92, 0.82), rgba(24, 16, 54, 0.82));
+  border: 3px solid var(--ink);
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.12), 0 3px 0 rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(6px);
+}
+
+/* 3D push button: glossy top, dark base, shine sweep on hover, squash on press.
+   Colour comes from --btn (face) and --btn-dark (base). */
+.btn-game {
+  --btn: #3ddc84;
+  --btn-dark: #1f9a55;
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  color: white;
+  cursor: pointer;
+  border: 3px solid var(--ink);
+  border-radius: 18px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--btn) 62%, white) 0%,
+    var(--btn) 48%,
+    color-mix(in srgb, var(--btn) 82%, black) 100%
+  );
+  box-shadow:
+    0 6px 0 var(--ink),
+    0 11px 18px rgba(0, 0, 0, 0.28),
+    inset 0 -5px 0 var(--btn-dark),
+    inset 0 3px 0 rgba(255, 255, 255, 0.5);
+  transform: translateY(0);
+  transition: transform 110ms cubic-bezier(.3,1.6,.5,1), box-shadow 110ms ease, filter 120ms ease;
+}
+/* Glossy highlight across the top half. */
+.btn-game::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  left: 7px;
+  right: 7px;
+  top: 3px;
+  height: 44%;
+  border-radius: 12px 12px 50% 50% / 12px 12px 40% 40%;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0.05));
+  pointer-events: none;
+}
+/* The shine that sweeps across on hover. */
+.btn-game::after {
+  content: '';
+  position: absolute;
+  top: -60%;
+  left: -40%;
+  width: 30%;
+  height: 220%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
+  transform: rotate(18deg) translateX(-260%);
+  pointer-events: none;
+}
+.btn-game:hover {
+  transform: translateY(-2px) scale(1.035);
+  filter: brightness(1.07) saturate(1.08);
+}
+.btn-game:hover::after {
+  animation: btn-shine 0.75s ease;
+}
+.btn-game:active {
+  transform: translateY(5px) scale(0.98);
+  box-shadow:
+    0 1px 0 var(--ink),
+    0 3px 6px rgba(0, 0, 0, 0.25),
+    inset 0 -3px 0 var(--btn-dark),
+    inset 0 3px 0 rgba(255, 255, 255, 0.45);
+}
+.btn-game:disabled {
+  filter: grayscale(0.85) brightness(0.78);
+  cursor: not-allowed;
+  transform: none;
+}
+.btn-game:focus-visible {
+  outline: 3px solid #fff;
+  outline-offset: 3px;
+}
+@keyframes btn-shine {
+  from { transform: rotate(18deg) translateX(-260%); }
+  to { transform: rotate(18deg) translateX(560%); }
+}
+
+/* A square menu tile: big icon, label strip along the bottom. */
+.tile {
+  width: 78px;
+  height: 78px;
+  border-radius: 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.tile-label {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 3px;
+  font-family: 'Fredoka One', 'Arial Rounded MT Bold', system-ui, sans-serif;
+  font-size: 14px;
+  text-align: center;
+  text-shadow: 0 2px 0 var(--ink), 1px 1px 0 var(--ink), -1px 1px 0 var(--ink), 1px -1px 0 var(--ink), -1px -1px 0 var(--ink);
+}
+.badge {
+  position: absolute;
+  top: -10px;
+  right: -10px;
+  z-index: 2;
+  min-width: 26px;
+  padding: 0 6px;
+  border: 3px solid var(--ink);
+  border-radius: 999px;
+  background: linear-gradient(180deg, #ff7a93, #ff2d55);
+  color: white;
+  font-family: 'Fredoka One', 'Arial Rounded MT Bold', system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 20px;
+  text-align: center;
+  box-shadow: 0 2px 0 var(--ink);
+  animation: badge-bob 1.8s ease-in-out infinite;
+}
+@keyframes badge-bob {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-3px) scale(1.08); }
+}
+
+/* Glossy progress fill with moving diagonal stripes. */
+.fill-stripes {
+  background-image:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.45), rgba(255, 255, 255, 0) 55%),
+    repeating-linear-gradient(-45deg, rgba(255, 255, 255, 0.18) 0 10px, transparent 10px 20px),
+    linear-gradient(90deg, var(--from, #38bdf8), var(--to, #3ee0ff));
+  background-size: 100% 100%, 28px 28px, 100% 100%;
+  animation: stripes 1s linear infinite;
+}
+@keyframes stripes {
+  from { background-position: 0 0, 0 0, 0 0; }
+  to { background-position: 0 0, 28px 0, 0 0; }
+}
+
+/* Soft rotating light rays behind a highlighted item (the shop's "aura"). */
+.aura {
+  position: absolute;
+  inset: -18%;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle, color-mix(in srgb, var(--aura) 75%, transparent) 0%, transparent 62%),
+    repeating-conic-gradient(from 0deg, color-mix(in srgb, var(--aura) 45%, transparent) 0deg 10deg, transparent 10deg 30deg);
+  -webkit-mask: radial-gradient(circle, #000 35%, transparent 70%);
+  mask: radial-gradient(circle, #000 35%, transparent 70%);
+  animation: aura-spin 7s linear infinite, aura-pulse 2.2s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes aura-spin { to { rotate: 360deg; } }
+@keyframes aura-pulse {
+  0%, 100% { opacity: 0.75; scale: 0.94; }
+  50% { opacity: 1; scale: 1.06; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .aura, .badge, .fill-stripes { animation: none; }
+}
+
+.popup {
+  position: absolute;
+  left: 0;
+  top: 0;
+  font-family: 'Fredoka One', 'Arial Rounded MT Bold', system-ui, sans-serif;
+  font-size: 26px;
+  color: var(--power);
+  opacity: 0;
+  pointer-events: none;
+  will-change: transform, opacity;
+  white-space: nowrap;
+  text-shadow:
+    0 3px 0 var(--ink), 2px 2px 0 var(--ink), -2px 2px 0 var(--ink), 2px -2px 0 var(--ink),
+    -2px -2px 0 var(--ink);
+}
+.popup[data-kind='rep'] {
+  color: #8cff6b;
+  font-size: 22px;
+}
+.popup[data-kind='trophy'] {
+  color: var(--trophy);
+}
+
+@keyframes pop-in {
+  0% { transform: scale(0.4); opacity: 0; }
+  60% { transform: scale(1.12); opacity: 1; }
+  100% { transform: scale(1); }
+}
+@keyframes float-up {
+  0% { transform: translateY(12px); opacity: 0; }
+  15% { transform: translateY(0); opacity: 1; }
+  85% { opacity: 1; }
+  100% { transform: translateY(-10px); opacity: 0; }
+}
+@keyframes wobble {
+  0%, 100% { transform: rotate(0deg) scale(1); }
+  20% { transform: rotate(-12deg) scale(1.04); }
+  40% { transform: rotate(10deg) scale(1.06); }
+  60% { transform: rotate(-8deg) scale(1.08); }
+  80% { transform: rotate(6deg) scale(1.1); }
+}
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 210, 63, 0.6); }
+  50% { box-shadow: 0 0 0 10px rgba(255, 210, 63, 0); }
+}
+@keyframes spin-slow {
+  to { transform: rotate(360deg); }
+}
+
+.anim-pop { animation: pop-in 360ms cubic-bezier(.2,1.4,.4,1) both; }
+.anim-float { animation: float-up 1.7s ease both; }
+.anim-wobble { animation: wobble 0.6s ease-in-out infinite; }
+.anim-pulse { animation: pulse-glow 1.4s ease-out infinite; }
+.anim-spin { animation: spin-slow 6s linear infinite; }
+
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .anim-wobble, .anim-pulse, .anim-spin { animation: none; }
+}
+
+@keyframes levelup {
+  0% { transform: scale(0.3) translateY(20px); opacity: 0; }
+  25% { transform: scale(1.15) translateY(0); opacity: 1; }
+  40% { transform: scale(1); }
+  80% { opacity: 1; transform: translateY(-6px); }
+  100% { opacity: 0; transform: translateY(-24px); }
+}
+@keyframes flash {
+  0% { opacity: 0.85; }
+  100% { opacity: 0; }
+}
+@keyframes confetti {
+  0% { transform: translateY(0) rotate(0deg); opacity: 1; }
+  100% { transform: translateY(105vh) rotate(720deg); opacity: 0.6; }
+}
+@keyframes sheet-in {
+  0% { transform: translateY(24px) scale(0.97); opacity: 0; }
+  100% { transform: translateY(0) scale(1); opacity: 1; }
+}
+.anim-levelup { animation: levelup 1.1s cubic-bezier(.2,1.2,.4,1) both; }
+.anim-flash { animation: flash 0.6s ease-out both; }
+.anim-confetti { animation: confetti 2.2s cubic-bezier(.3,.6,.6,1) both; }
+.anim-sheet { animation: sheet-in 220ms cubic-bezier(.2,1.1,.4,1) both; }
+@media (prefers-reduced-motion: reduce) {
+  .anim-levelup, .anim-confetti, .anim-sheet { animation-duration: 1ms; }
+}
+
+.nameplate {
+  position: absolute;
+  left: 0;
+  top: 0;
+  opacity: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  font-family: 'Fredoka One', 'Arial Rounded MT Bold', system-ui, sans-serif;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+.nameplate-name {
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: rgba(29, 20, 64, 0.62);
+  font-size: 15px;
+  color: white;
+  white-space: nowrap;
+  text-shadow: 0 2px 0 var(--ink);
+}
+/* A chat message over a player (Boxity chat): two short lines at most. */
+.chat-bubble {
+  position: relative;
+  max-width: 220px;
+  padding: 5px 11px 6px;
+  border-radius: 14px;
+  border: 3px solid #111;
+  background: #fff;
+  color: #1d1f26;
+  font-size: 14px;
+  line-height: 1.2;
+  text-align: center;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  box-shadow: 0 3px 0 #111;
+}
+
+/* ===========================================================================
+ * HUD kit from +1 Kick Field Goal (same author): chunky buttons, outlined text.
+ * ======================================================================== */
+
+:root {
+  /* HUD unit: one pixel of a 1920x1080 layout, scaled to the viewport. */
+  --px: clamp(0.3px, min(100vw / 1920, 100vh / 1080), 1.4px);
+}
+@media (orientation: portrait) {
+  :root {
+    --px: clamp(0.3px, min(100vw / 1000, 100vh / 1900), 1.4px);
+  }
+}
+
+/* The first-time guide's card: right at the top centre, out of the way of the view, clear of
+   the stats (left) and the toolbar (right). On portrait screens the top is full, so it sits right of the stats panel,
+   under the toolbar buttons. */
+.tut-card {
+  top: calc(var(--px) * 12);
+  left: 4vw;
+  right: 4vw;
+  justify-content: center;
+}
+@media (orientation: portrait) {
+  .tut-card {
+    top: calc(var(--hud-top) + 8px);
+    left: 33vw;
+    right: 8px;
+    justify-content: flex-end;
+  }
+}
+
+/*
+ * HUD layout, as variables the HUD reads:
+ *  --hud-top       where the top-left stats start: below Boxity's toolbar and logo,
+ *                  which sit in the top-left corner of every Boxity screen.
+ *  --bar-bottom    the Power bar's bottom edge.
+ *  --action-bottom the context buttons (THROW!, Bottle Shop) and toasts sit above this.
+ * Touch controls (html.touch): the joystick and JUMP are sized from the screen.
+ *  - Landscape (and desktop): they sit in the bottom corners, beside the Power bar.
+ *  - Portrait: they sit at the very bottom, where the thumbs are; the Power bar goes
+ *    just above them and the context buttons above that.
+ */
+:root {
+  --hud-top: calc(58px + var(--px) * 6);
+  --joy: clamp(96px, min(30vw, 24vh), 150px);
+  --jump: calc(var(--joy) * 0.62);
+  --touch-bottom: max(14px, env(safe-area-inset-bottom));
+  --touch-side: max(14px, env(safe-area-inset-left));
+  --bar-bottom: calc(var(--px) * 14);
+  --action-bottom: calc(var(--px) * 300);
+}
+@media (orientation: portrait) {
+  :root {
+    --joy: clamp(100px, min(28vw, 17vh), 140px);
+    --touch-side: 16px;
+  }
+  html.touch {
+    --touch-bottom: max(16px, env(safe-area-inset-bottom));
+    --bar-bottom: calc(var(--touch-bottom) + var(--joy) + 12px);
+    --action-bottom: calc(var(--bar-bottom) + var(--px) * 290);
+  }
+}
+
+/* The left menu: two columns, three in a short landscape screen. */
+.left-menu { grid-template-columns: repeat(2, auto); }
+@media (orientation: landscape) and (max-height: 520px) {
+  .left-menu { grid-template-columns: repeat(3, auto); }
+}
+
+.pp-font {
+  font-family: 'Fredoka One', 'Arial Rounded MT Bold', system-ui, sans-serif;
+  letter-spacing: 0.01em;
+}
+
+/* Outlined text, see StrokeText.jsx. */
+.pp-text {
+  position: relative;
+  display: inline-block;
+  font-family: 'Fredoka One', 'Arial Rounded MT Bold', system-ui, sans-serif;
+  white-space: nowrap;
+}
+.pp-text-stroke {
+  position: absolute;
+  inset: 0;
+  color: #000;
+  -webkit-text-stroke-color: #000;
+  -webkit-text-stroke-width: 6px;
+  text-shadow: 0 0.06em 0 #000;
+  pointer-events: none;
+  user-select: none;
+}
+.pp-text-fill {
+  position: relative;
+}
+
+.pp-btn {
+  cursor: pointer;
+  transition: transform 0.08s ease-out, filter 0.12s;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.pp-btn:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.pp-btn:active:not(:disabled) {
+  transform: scale(0.93);
+}
+.pp-btn:disabled {
+  cursor: default;
+}
+
+/* The chunky button: a thick dark lip it presses down into, a glossy top. */
+.pp-chunky {
+  --lip: calc(var(--px) * 6);
+  box-shadow:
+    0 var(--lip) 0 #111,
+    0 calc(var(--lip) + var(--px) * 4) calc(var(--px) * 6) rgba(0, 0, 0, 0.3),
+    inset 0 calc(var(--px) * -5) 0 rgba(0, 0, 0, 0.2);
+  transition: transform 0.07s ease-out, box-shadow 0.07s ease-out, filter 0.12s;
+}
+.pp-chunky:hover:not(:disabled) {
+  transform: translateY(calc(var(--px) * -2));
+  filter: brightness(1.07) saturate(1.05);
+}
+.pp-chunky:active:not(:disabled) {
+  transform: translateY(calc(var(--lip) - var(--px) * 1));
+  box-shadow: 0 calc(var(--px) * 1) 0 #111, inset 0 calc(var(--px) * -3) 0 rgba(0, 0, 0, 0.2);
+}
+.pp-chunky:disabled {
+  filter: saturate(0.35) brightness(0.92);
+}
+.pp-chunky > * {
+  z-index: 1;
+}
+.pp-chunky > :not(.absolute) {
+  position: relative;
+}
+/* The left-menu tiles: a glowing rim in the tile's colour, a soft halo behind the icon
+   and a dark pill for the label; a tile with something waiting nudges every few seconds. */
+.pp-chunky.menu-tile {
+  box-shadow:
+    0 var(--lip) 0 #111,
+    0 calc(var(--lip) + var(--px) * 4) calc(var(--px) * 6) rgba(0, 0, 0, 0.3),
+    0 0 calc(var(--px) * 16) color-mix(in srgb, var(--accent) 55%, transparent),
+    inset 0 0 0 calc(var(--px) * 3) rgba(255, 255, 255, 0.3),
+    inset 0 calc(var(--px) * -6) 0 rgba(0, 0, 0, 0.16);
+}
+.menu-halo {
+  left: 50%;
+  top: 44%;
+  width: 82%;
+  aspect-ratio: 1;
+  translate: -50% -50%;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.6) 0%, rgba(255, 255, 255, 0.18) 50%, rgba(255, 255, 255, 0) 72%);
+  pointer-events: none;
+}
+.menu-icon {
+  filter: drop-shadow(0 calc(var(--px) * 4) 0 rgba(0, 0, 0, 0.32));
+}
+.menu-ribbon {
+  left: 50%;
+  translate: -50% 0;
+  padding: calc(var(--px) * 1) calc(var(--px) * 16) calc(var(--px) * 3);
+  border-radius: calc(var(--px) * 16);
+  background: linear-gradient(180deg, rgba(40, 46, 70, 0.96), rgba(14, 16, 30, 0.96));
+  border: calc(var(--px) * 3) solid #111;
+  box-shadow: inset 0 0 0 calc(var(--px) * 2) var(--accent);
+  line-height: 1.15;
+}
+@keyframes menu-nudge {
+  0%, 70%, 100% { transform: translateY(0) rotate(0); }
+  76% { transform: translateY(calc(var(--px) * -8)) rotate(-4deg); }
+  84% { transform: translateY(0) rotate(3deg); }
+  92% { transform: translateY(calc(var(--px) * -3)) rotate(-1.5deg); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .menu-alert {
+    animation: menu-nudge 3.2s ease-in-out infinite;
+  }
+}
+.pp-chunky > .pp-gloss {
+  position: absolute;
+  z-index: 0;
+  left: 6%;
+  right: 6%;
+  top: 7%;
+  height: 42%;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.72) 0%, rgba(255, 255, 255, 0.1) 100%);
+  pointer-events: none;
+}
+
+@keyframes pp-panel-in {
+  from { transform: scale(0.85); opacity: 0; }
+  60% { transform: scale(1.03); opacity: 1; }
+  to { transform: none; }
+}
+.pp-panel-in {
+  animation: pp-panel-in 0.22s ease-out;
+}
+
+@keyframes pp-bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-12%); }
+}
+.pp-bounce {
+  animation: pp-bounce 0.8s ease-in-out infinite;
+  filter: drop-shadow(0 4px 0 rgba(0, 0, 0, 0.3));
+}
+
+/* A number that just changed. */
+@keyframes pp-bump {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.3); }
+  100% { transform: scale(1); }
+}
+.pp-bump {
+  display: inline-block;
+  transform-origin: left center;
+  animation: pp-bump 0.35s ease-out;
+}
+
+/* The THROW! button breathes a green glow (opacity only: compositor-friendly). */
+@keyframes pp-pulse {
+  0%, 100% { opacity: 0; }
+  50% { opacity: 1; }
+}
+.pp-roll-btn::after {
+  content: '';
+  position: absolute;
+  inset: calc(var(--px) * -4);
+  z-index: -1;
+  border-radius: inherit;
+  box-shadow: 0 0 calc(var(--px) * 22) calc(var(--px) * 6) rgba(120, 255, 90, 0.85);
+  pointer-events: none;
+  opacity: 0;
+  will-change: opacity;
+  animation: pp-pulse 1.1s ease-in-out infinite;
+}
+
+/* THROW!: a gold rim, a medallion for the bottle, and a light sweeping across every few seconds. */
+.pp-roll-btn {
+  outline: calc(var(--px) * 5) solid #ffd23f;
+  outline-offset: calc(var(--px) * -1);
+}
+.pp-roll-btn:disabled {
+  outline-color: #8b93a7;
+}
+.roll-medal {
+  border-radius: 50%;
+  background: radial-gradient(circle at 38% 30%, #ffffff 0%, #d9ffd0 45%, #7be564 100%);
+  border: calc(var(--px) * 5) solid #111;
+  box-shadow: inset 0 calc(var(--px) * -5) 0 rgba(0, 0, 0, 0.14), 0 calc(var(--px) * 3) 0 rgba(0, 0, 0, 0.3);
+}
+.roll-shine-clip {
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+.roll-shine {
+  position: absolute;
+  top: -20%;
+  bottom: -20%;
+  left: 0;
+  width: 22%;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0));
+  transform: rotate(18deg) translateX(-250%);
+  will-change: transform;
+  animation: roll-shine 3.4s ease-in-out infinite;
+}
+@keyframes roll-shine {
+  0%, 55% { transform: rotate(18deg) translateX(-250%); }
+  100% { transform: rotate(18deg) translateX(560%); }
+}
+
+@keyframes pp-rays {
+  0% { transform: rotate(0deg) scale(0.4); opacity: 0; }
+  10% { opacity: 1; transform: rotate(18deg) scale(1.1); }
+  100% { transform: rotate(180deg) scale(1.1); opacity: 0.9; }
+}
+.pp-rays {
+  animation: pp-rays 3s linear both;
+  mask-image: radial-gradient(circle, #000 25%, transparent 70%);
+  -webkit-mask-image: radial-gradient(circle, #000 25%, transparent 70%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pp-bounce, .pp-roll-btn::after, .roll-shine, .pp-rays { animation: none; }
+}
+
+/* Hatch: the egg shakes harder and harder, then bursts (from +1 Kick Field Goal). */
+@keyframes pp-egg-shake {
+  0% { transform: rotate(0) scale(1); }
+  15% { transform: rotate(-6deg); }
+  30% { transform: rotate(6deg); }
+  45% { transform: rotate(-10deg); }
+  60% { transform: rotate(10deg); }
+  72% { transform: rotate(-14deg) scale(1.04); }
+  84% { transform: rotate(14deg) scale(1.08); }
+  95% { transform: rotate(0) scale(1.15); opacity: 1; }
+  100% { transform: scale(1.3); opacity: 0; }
+}
+.pp-egg {
+  animation: pp-egg-shake 1.25s ease-in both;
+}
+
+/* ---- Proximity prompt ("press E") over shop pedestals and egg stands ---- */
+.prompt-card {
+  position: relative;
+  background: linear-gradient(180deg, rgba(44, 48, 64, 0.95) 0%, rgba(24, 26, 38, 0.95) 100%);
+  box-shadow: inset 0 calc(var(--px) * 4) 0 rgba(255, 255, 255, 0.1), 0 calc(var(--px) * 6) 0 #111;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.prompt-card:disabled { cursor: default; }
+.prompt-card:not(:disabled):active { transform: translateY(calc(var(--px) * 3)); }
+/* The little pointer under the card, towards the pedestal. */
+.prompt-card::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--px) * -18);
+  width: calc(var(--px) * 26);
+  height: calc(var(--px) * 26);
+  transform: translateX(-50%) rotate(45deg);
+  background: rgba(24, 26, 38, 0.95);
+  border-right: inherit;
+  border-bottom: inherit;
+  border-radius: 0 0 calc(var(--px) * 6) 0;
+}
+.prompt-key {
+  font-family: 'Fredoka One', 'Arial Rounded MT Bold', system-ui, sans-serif;
+  color: #1d1f26;
+  background: linear-gradient(180deg, #ffffff 0%, #d9dee8 100%);
+  border: calc(var(--px) * 4) solid #111;
+  box-shadow: 0 calc(var(--px) * 5) 0 #111;
+  padding: 0 calc(var(--px) * 8);
+}
+.prompt-key-press { animation: prompt-key-press 180ms ease-out; }
+@keyframes prompt-key-press {
+  40% { transform: translateY(calc(var(--px) * 4)); box-shadow: 0 calc(var(--px) * 1) 0 #111; }
+}
+
+/* ---- Egg hatch: cracks spread while the egg shakes (same 1.25 s as .pp-egg) ---- */
+.egg-crack { opacity: 0; animation: egg-crack-in 1.25s steps(1, end) both; }
+.egg-crack-late { opacity: 0; animation: egg-crack-in-late 1.25s steps(1, end) both; }
+@keyframes egg-crack-in { 0%, 44% { opacity: 0; } 45%, 100% { opacity: 1; } }
+@keyframes egg-crack-in-late { 0%, 69% { opacity: 0; } 70%, 100% { opacity: 1; } }

@@ -1,0 +1,147 @@
+# Ships Bottle Tumble to Bloxity Legion: the dev branch to the dev channel, main to prod.
+#
+#   server   -> Docker image in this repo's GitHub Container Registry, then Legion rolls
+#               it out. Players reach it only through Legion's matchmaker
+#               (Legion.SDK.net.resolveEndpoint); its host.bloxity.io name is for HTTP only.
+#   frontend -> the built client, served at https://1-bottle-breaking.play.bloxity.io
+#               (prod) and https://1-bottle-breaking.dev.play.bloxity.io (dev)
+#
+# Every push deploys to the production platform, and to the staging platform too once
+# its token exists. A manual run (Actions -> Run workflow) deploys any branch to the one
+# platform you pick.
+#
+# Repository secrets (Settings -> Secrets and variables -> Actions):
+#   LEGION_DEPLOY_TOKEN        production platform (required)
+#   LEGION_DEPLOY_TOKEN_STAGE  staging platform (optional; staging is skipped without it)
+# After the first run, make the ghcr.io package public so Legion can pull it
+# (repo -> Packages -> 1-bottle-breaking-server -> Package settings -> Change visibility).
+#
+# One client build works on every platform: the Bloxity SDK and the server find their
+# own environment at runtime, so no URL or environment goes into the build.
+
+name: Deploy to Bloxity Legion
+
+on:
+  push:
+    branches: [dev, main]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Platform to deploy this branch to
+        type: choice
+        options: [staging, prod]
+        default: staging
+
+env:
+  GAME_ID: 1-bottle-breaking
+  # Players per pod (seatCap = the Colyseus room's maxClients, 8); a full pod makes Legion start another.
+  ROOM_SIZE: 8
+
+concurrency:
+  group: deploy-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  # Which platforms this run deploys to, as a JSON list for the matrix below.
+  targets:
+    runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.pick.outputs.list }}
+      channel: ${{ steps.pick.outputs.channel }}
+    steps:
+      - name: Pick platforms and channel
+        id: pick
+        env:
+          HAS_STAGE_TOKEN: ${{ secrets.LEGION_DEPLOY_TOKEN_STAGE != '' }}
+          MANUAL_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.target || '' }}
+        run: |
+          if [ -n "$MANUAL_TARGET" ]; then
+            list="[\"$MANUAL_TARGET\"]"
+          elif [ "$HAS_STAGE_TOKEN" = "true" ]; then
+            list='["prod","staging"]'
+          else
+            list='["prod"]'
+          fi
+          if [ "$GITHUB_REF_NAME" = "main" ]; then channel=prod; else channel=dev; fi
+          echo "Deploying $GITHUB_REF_NAME to $list, channel $channel"
+          echo "list=$list" >> "$GITHUB_OUTPUT"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    name: deploy (${{ matrix.target }})
+    needs: targets
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      # One platform failing doesn't stop the other.
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.targets.outputs.list) }}
+    env:
+      CHANNEL: ${{ needs.targets.outputs.channel }}
+      # Each platform strictly with its own token: staging never falls back to prod's.
+      DEPLOY_TOKEN: ${{ matrix.target == 'staging' && secrets.LEGION_DEPLOY_TOKEN_STAGE || matrix.target == 'prod' && secrets.LEGION_DEPLOY_TOKEN || '' }}
+      BLOXITY_API: ${{ matrix.target == 'staging' && 'https://api.stage.bloxity.io' || 'https://api.bloxity.io' }}
+      LEGION_API: ${{ matrix.target == 'staging' && 'https://legion.stage.bloxity.io' || 'https://legion.bloxity.io' }}
+    steps:
+      - name: Check the deploy token
+        run: |
+          if [ -z "$DEPLOY_TOKEN" ]; then
+            if [ "${{ matrix.target }}" = "staging" ]; then
+              echo "::error::LEGION_DEPLOY_TOKEN_STAGE is empty: add it as a repository secret to deploy to staging."
+            else
+              echo "::error::LEGION_DEPLOY_TOKEN is empty: add it as a repository secret to deploy to production."
+            fi
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - name: Image name
+        id: meta
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "image=ghcr.io/$owner/$GAME_ID-server:${{ matrix.target }}-$CHANNEL-$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GitHub Container Registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build and push the server image
+        run: |
+          docker build -f server/Dockerfile -t "${{ steps.meta.outputs.image }}" .
+          docker push "${{ steps.meta.outputs.image }}"
+
+      - name: Roll it out on Legion
+        run: |
+          curl -sS --fail-with-body -X POST "$LEGION_API/v1/apps/$GAME_ID/deploy" \
+            -H "Authorization: Bearer $DEPLOY_TOKEN" \
+            -H 'Content-Type: application/json' \
+            -d "{\"channel\":\"$CHANNEL\",\"image\":\"${{ steps.meta.outputs.image }}\",\"version\":\"$GITHUB_SHA\",\"seatCap\":$ROOM_SIZE}"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Build the client
+        working-directory: client
+        env:
+          # Join through Legion's matchmaker; the Bloxity SDK identifies the game by slug.
+          # Nothing platform-specific: the same build runs on prod and staging.
+          VITE_LEGION_GAME_ID: ${{ env.GAME_ID }}
+          VITE_GAME_SLUG: ${{ env.GAME_ID }}
+        run: |
+          npm ci
+          npm run build
+
+      - name: Upload it to Legion
+        run: |
+          (cd client/dist && zip -qr ../../build.zip .)
+          curl -sS --fail-with-body -X POST \
+            "$BLOXITY_API/v1/hosting/games/$GAME_ID/frontend?channel=$CHANNEL&version=$GITHUB_SHA" \
+            -H "Authorization: Bearer $DEPLOY_TOKEN" \
+            -H 'Content-Type: application/zip' \
+            --data-binary @build.zip

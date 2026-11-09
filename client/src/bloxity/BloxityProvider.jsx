@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 
 import { BloxityContext } from './BloxityContext'
-import { getSDK, safeCall, toUnsubscribe, waitForSDK } from './sdk'
+import { GAME_SLUG } from './identity'
+import { installIntegration, setupOnce } from './integration'
+import { getSDK, markInitialized, safeCall, toUnsubscribe, waitForSDK } from './sdk'
+import { onAccountChanged } from './services'
 import { DEFAULT_PROPORTIONS, useBloxityStore } from './store'
 
 /**
@@ -34,23 +37,25 @@ function isResetSentinel(equipped) {
 }
 
 /**
- * Bloxity's real endpoints.
+ * `init()` gets the game slug and nothing else: the SDK finds Boxity's endpoints itself
+ * from `window.BLOXITY_ENV` (set by the host page; in `vite dev`, by the plugin in
+ * vite.config.js) or the portal handshake, falling back to production. See env.js:
+ * nothing here passes or guesses URLs.
  *
- * These MUST be passed explicitly. If `init()` receives neither `apiUrl` nor
- * `portalUrl`, the SDK checks whether it is running on localhost/127.0.0.1 and, if
- * so, silently repoints BOTH at `window.location.origin` - i.e. at the Vite dev
- * server. `showAuthPopup()` then opens `http://localhost:5173/auth?popup=1`, Vite's
- * SPA fallback serves the game again inside the popup, no token is ever posted back,
- * and login can never succeed. That fallback is meant for people running the whole
- * Bloxity portal locally; for game development it has to be overridden.
- */
-const PORTAL_URL = import.meta.env.VITE_BLOXITY_PORTAL_URL || 'https://bloxity.io'
-const API_URL = import.meta.env.VITE_BLOXITY_API_URL || 'https://api.bloxity.io'
 
-function initOnce(gameSlug, signal) {
+ * Not abortable on purpose: the init is shared by every mount, and the SDK script loads
+ * async, so StrictMode's mount -> cleanup -> mount would otherwise abort the one init
+ * the second mount is waiting on. Each effect ignores a result it no longer wants via
+ * its own `cancelled` flag.
+ */
+function initOnce(gameSlug) {
   if (!initPromise) {
-    initPromise = waitForSDK({ signal }).then((sdk) => {
-      sdk.init({ gameSlug, apiUrl: API_URL, portalUrl: PORTAL_URL })
+    initPromise = waitForSDK().then((sdk) => {
+      sdk.init({ gameSlug })
+      // Once per page: screen ads, features and leaderboards (integration.js).
+      setupOnce(sdk)
+      // Matchmaking may start now (net/connection.js waits for this).
+      markInitialized(sdk)
       return sdk
     })
     // A failed init shouldn't poison every later attempt (e.g. HMR reload).
@@ -69,9 +74,8 @@ function initOnce(gameSlug, signal) {
  * @param {{ gameSlug?: string, children: React.ReactNode }} props
  */
 export function BloxityProvider({ gameSlug, children }) {
-  // >>> FILL ME IN <<< Set VITE_GAME_SLUG in client/.env to the slug from your
-  // Bloxity developer dashboard. The `gameSlug` prop overrides it if passed.
-  const slug = gameSlug || import.meta.env.VITE_GAME_SLUG || 'MY_GAME_SLUG'
+  // The slug from the Boxity developer dashboard (see identity.js). The prop overrides it.
+  const slug = gameSlug || GAME_SLUG
 
   const status = useBloxityStore((s) => s.status)
   const error = useBloxityStore((s) => s.error)
@@ -81,26 +85,22 @@ export function BloxityProvider({ gameSlug, children }) {
   const proportions = useBloxityStore((s) => s.proportions)
 
   const sdkRef = useRef(null)
+  /** Set once the game has called loadingEnd(); replayed if the SDK arrives later. */
+  const loadingDoneRef = useRef(false)
 
   useEffect(() => {
-    if (slug === 'MY_GAME_SLUG') {
-      console.warn(
-        '[bloxity] VITE_GAME_SLUG is still the placeholder "MY_GAME_SLUG". ' +
-          'Set it in client/.env before testing a real login.',
-      )
-    }
-
-    const controller = new AbortController()
     const store = useBloxityStore.getState()
     const unsubscribers = []
     let cancelled = false
 
     store.setStatus('loading')
 
-    initOnce(slug, controller.signal)
+    initOnce(slug)
       .then((sdk) => {
         if (cancelled) return
         sdkRef.current = sdk
+        // The SDK script loads async, so the game may already have finished loading.
+        if (loadingDoneRef.current) safeCall(sdk.game?.loadingEnd)
 
         const readEquipped = () =>
           safeCall(sdk.avatar.getEquipped?.bind(sdk.avatar)) || null
@@ -111,6 +111,8 @@ export function BloxityProvider({ gameSlug, children }) {
           toUnsubscribe(
             sdk.auth.onUserChanged((nextUser) => {
               useBloxityStore.getState().setUser(nextUser || null)
+              // Friends and the Gems balance belong to the account (services.js).
+              onAccountChanged(nextUser || null)
               // The guest identity is what the HUD falls back to when signed out.
               useBloxityStore
                 .getState()
@@ -164,6 +166,9 @@ export function BloxityProvider({ gameSlug, children }) {
           s.setEquipped(safeCall(sdk.avatar.getEquipped?.bind(sdk.avatar)) || null)
         }
 
+        // Ads, settings, portal events, chat, lifecycle (integration.js).
+        unsubscribers.push(installIntegration(sdk))
+
         useBloxityStore.getState().setStatus('ready')
       })
       .catch((err) => {
@@ -174,7 +179,6 @@ export function BloxityProvider({ gameSlug, children }) {
 
     return () => {
       cancelled = true
-      controller.abort()
       unsubscribers.forEach((fn) => safeCall(fn))
     }
   }, [slug])
@@ -199,9 +203,15 @@ export function BloxityProvider({ gameSlug, children }) {
   // `window.Legion` directly.
   const game = useMemo(
     () => ({
-      loadingStep: (label) =>
-        safeCall((sdkRef.current || getSDK())?.game?.loadingStep, label),
-      loadingEnd: () => safeCall((sdkRef.current || getSDK())?.game?.loadingEnd),
+      loadingStep: (label) => {
+        // Late steps (e.g. an outfit change mid-game) must not re-open the loader.
+        if (loadingDoneRef.current) return undefined
+        return safeCall((sdkRef.current || getSDK())?.game?.loadingStep, label)
+      },
+      loadingEnd: () => {
+        loadingDoneRef.current = true
+        return safeCall((sdkRef.current || getSDK())?.game?.loadingEnd)
+      },
       updateRoom: (room) => safeCall((sdkRef.current || getSDK())?.game?.updateRoom, room),
     }),
     [],

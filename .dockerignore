@@ -1,0 +1,9 @@
+# The server image needs only shared/ and server/ (see server/Dockerfile).
+**/node_modules
+client
+**/data
+**/*.db
+**/.env
+**/.env.*
+.git
+.github
