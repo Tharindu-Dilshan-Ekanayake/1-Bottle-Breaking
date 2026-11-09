@@ -1,64 +1,36 @@
 import { useBloxity } from '../bloxity/BloxityContext'
+import { useUi } from '../game/stores/ui'
+import { GRADIENTS, u } from './hud/style'
+import StrokeText from './StrokeText'
 
 /**
- * Corner HUD.
- *
- * Uses the `getUser() || getGuest()` pattern (surfaced as `identity` on the context)
- * so there is always a name and picture to show, even before the player logs in.
+ * Your name tag (top-right): picture and name, from `getUser() || getGuest()`, so there
+ * is always a name to show. No Log in / Log out here: Boxity's own toolbar handles
+ * accounts.
  */
 export function AuthHUD() {
-  const { identity, isLoggedIn, login, logout, status, error } = useBloxity()
-
+  const { identity } = useBloxity()
+  const throwing = useUi((s) => s.mode === 'throw')
+  // Panels and the hatch have the top of the screen to themselves.
+  const covered = useUi((s) => s.panel !== null || s.hatching !== null)
   const name = identity?.displayName || identity?.username || 'Guest'
   const pfp = identity?.pfp
-
+  if (throwing || covered) return null
   return (
-    <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between p-4">
-      <div className="pointer-events-auto flex items-center gap-3 rounded-xl bg-black/50 px-3 py-2 text-white backdrop-blur">
+    <div className="pp-font pointer-events-none absolute z-10 flex items-center" style={{ right: u(16), top: u(14), gap: u(10) }}>
+      <span className="hidden sm:inline" style={{ fontSize: u(32) }}>
+        <StrokeText stroke={u(7)}>{name}</StrokeText>
+      </span>
+      <div
+        className="grid place-items-center overflow-hidden rounded-full"
+        style={{ width: u(64), height: u(64), border: `${u(5)} solid #111`, background: GRADIENTS.blueButton, boxShadow: `0 ${u(4)} 0 #111` }}
+      >
         {pfp ? (
-          <img
-            src={pfp}
-            alt=""
-            className="h-9 w-9 rounded-full object-cover ring-2 ring-white/30"
-          />
+          <img src={pfp} alt="" className="h-full w-full object-cover" />
         ) : (
-          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-white/20 text-sm font-semibold">
-            {name.charAt(0).toUpperCase()}
-          </div>
-        )}
-
-        <div className="leading-tight">
-          <div className="text-sm font-semibold">{name}</div>
-          <div className="text-xs text-white/60">
-            {isLoggedIn ? 'Signed in with Bloxity' : 'Playing as guest'}
-          </div>
-        </div>
-      </div>
-
-      <div className="pointer-events-auto flex flex-col items-end gap-2">
-        {isLoggedIn ? (
-          <button
-            type="button"
-            onClick={logout}
-            className="rounded-lg bg-white/10 px-3 py-2 text-sm font-medium text-white backdrop-blur transition hover:bg-white/20"
-          >
-            Log out
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={login}
-            disabled={status !== 'ready'}
-            className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-lg transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {status === 'ready' ? 'Log in with Bloxity' : 'Connecting…'}
-          </button>
-        )}
-
-        {status === 'error' && (
-          <div className="max-w-xs rounded-lg bg-red-600/80 px-3 py-2 text-xs text-white">
-            Bloxity SDK failed to load. {error?.message}
-          </div>
+          <span style={{ fontSize: u(36) }}>
+            <StrokeText stroke={u(7)}>{name.charAt(0).toUpperCase()}</StrokeText>
+          </span>
         )}
       </div>
     </div>

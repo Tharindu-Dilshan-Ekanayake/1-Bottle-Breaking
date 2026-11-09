@@ -1,20 +1,24 @@
 {
   "name": "server",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Authoritative game server for Bottle Tumble: Colyseus rooms, persistence and Bloxity auth.",
+  "main": "src/server.js",
+  "private": true,
+  "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node src/server.js",
-    "dev": "nodemon src/server.js"
+    "start": "node --env-file-if-exists=.env src/server.js",
+    "dev": "node --env-file-if-exists=.env --watch src/server.js",
+    "test": "node --test"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
   "dependencies": {
-    "cors": "^2.8.6",
-    "express": "^5.2.1",
-    "nodemon": "^3.1.14"
+    "@colyseus/core": "0.18.22",
+    "@colyseus/schema": "5.0.42",
+    "@colyseus/ws-transport": "0.18.4",
+    "cors": "2.8.6",
+    "express": "5.2.1",
+    "mongodb": "7.7.0"
+  },
+  "engines": {
+    "node": ">=22.13"
   }
 }

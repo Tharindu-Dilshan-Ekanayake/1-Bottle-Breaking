@@ -1,187 +1,248 @@
 import { useFrame } from '@react-three/fiber'
-import { CapsuleCollider, RigidBody, useRapier } from '@react-three/rapier'
-import { useRef } from 'react'
-import { Quaternion, Vector3 } from 'three'
+import { Component, Suspense, useEffect, useRef } from 'react'
+import { Vector3 } from 'three'
 
+import { isPadUnlocked } from '@shared/logic'
+import { groundHeightAt, nearbyAt, OBSTACLES, padAt, pushOutOfBlocked } from '@shared/world'
+
+import { getGame } from '../store/game'
+import { sfx } from './audio'
+import { BackBottle } from './Auras'
+import BlockAvatar from './BlockAvatar'
 import PlayerAvatar from './PlayerAvatar'
+import { PLAYER_HEIGHT } from './playerSize'
+import { runtime } from './runtime'
+import { useUi } from './stores/ui'
 import useKeyboard from './useKeyboard'
 
-// Capsule roughly matching the humanoid. Rapier's capsule args are the half-height of
-// the *cylindrical* section plus the radius, so total height = 2*(halfHeight+radius).
-const CAPSULE_RADIUS = 0.35
-const CAPSULE_HALF_HEIGHT = 0.55
-const PLAYER_HEIGHT = 2 * (CAPSULE_HALF_HEIGHT + CAPSULE_RADIUS)
+export { PLAYER_HEIGHT }
+const PLAYER_RADIUS = 0.5
+const MOVE_SPEED = 7
+const SPRINT_MULTIPLIER = 1.5
+const GRAVITY = -32
+const JUMP_VELOCITY = 10
+/** Ledges up to this tall are stepped onto automatically. */
+const STEP_HEIGHT = 0.5
 
-const MOVE_SPEED = 6
-const SPRINT_MULTIPLIER = 1.6
-const JUMP_IMPULSE = 5.2
-/** Extra ray length past the capsule bottom; tolerates small ground gaps. */
-const GROUND_RAY_SLACK = 0.15
-/** Stops one long Space press from re-triggering the moment the ray re-hits. */
-const JUMP_COOLDOWN_S = 0.25
+const BOUNDS = { minX: -29.4, maxX: 29.4, minZ: -22.75, maxZ: 23.4 }
 
-// Scratch objects, reused each frame so the loop allocates nothing.
-const _input = new Vector3()
-const _move = new Vector3()
+// Scratch objects, reused every frame.
 const _camForward = new Vector3()
 const _camRight = new Vector3()
-const _rayOrigin = new Vector3()
-const _targetQuat = new Quaternion()
-const _up = new Vector3(0, 1, 0)
+const _move = new Vector3()
 
-/**
- * The player: a dynamic Rapier capsule with the assembled Bloxity avatar as its
- * visual mesh. The avatar is a child of the RigidBody, so R3F/Rapier keeps the mesh
- * on the body transform automatically — no manual per-frame copying.
- *
- * @param {{ position?: [number,number,number], onAvatarReady?: () => void,
- *           bodyRef?: React.MutableRefObject<any> }} props
- */
-export function Player({ position = [0, 3, 0], onAvatarReady, bodyRef: externalBodyRef }) {
-  // The follow camera needs to read this body's transform, so the scene may own the
-  // ref. Fall back to a local one when used standalone.
-  const localBodyRef = useRef(null)
-  const bodyRef = externalBodyRef || localBodyRef
-  const visualRef = useRef(null)
-  const keys = useKeyboard()
-  const { rapier, world } = useRapier()
+/** Shortest signed angle from a to b. */
+function angleDelta(a, b) {
+  let d = (b - a) % (Math.PI * 2)
+  if (d > Math.PI) d -= Math.PI * 2
+  if (d < -Math.PI) d += Math.PI * 2
+  return d
+}
 
-  const jumpCooldown = useRef(0)
-
-  /**
-   * Motion state handed to the avatar so it can pose itself. A ref, not state:
-   * this is written every frame and must not trigger a re-render.
-   */
-  const motionRef = useRef({ time: 0, speed: 0, grounded: true, maxSpeed: MOVE_SPEED })
-
-  /**
-   * Grounded check: cast a short ray straight down from the capsule centre and see
-   * whether it hits anything before clearing the capsule's own bottom. Without this
-   * the player can jump indefinitely in mid-air.
-   */
-  // Plain function, not useCallback: it's only ever called from useFrame, so a stable
-  // identity buys nothing.
-  const isGrounded = () => {
-    const body = bodyRef.current
-    if (!body) return false
-
-    const pos = body.translation()
-    _rayOrigin.set(pos.x, pos.y, pos.z)
-
-    const ray = new rapier.Ray(_rayOrigin, { x: 0, y: -1, z: 0 })
-    const maxDistance = CAPSULE_HALF_HEIGHT + CAPSULE_RADIUS + GROUND_RAY_SLACK
-
-    const hit = world.castRay(
-      ray,
-      maxDistance,
-      true, // solid
-      undefined,
-      undefined,
-      undefined,
-      body, // exclude our own body, or we just hit ourselves
-    )
-
-    return hit !== null && hit.timeOfImpact <= maxDistance
+/** Swaps in the block avatar if the Bloxity model can't be loaded. */
+class AvatarBoundary extends Component {
+  constructor(props) {
+    super(props)
+    this.state = { failed: false }
   }
 
-  useFrame((state, delta) => {
-    const body = bodyRef.current
-    if (!body) return
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
 
-    jumpCooldown.current = Math.max(0, jumpCooldown.current - delta)
+  componentDidCatch(err) {
+    console.warn('[game] avatar failed to load; using block avatar', err)
+  }
 
+  render() {
+    return this.state.failed ? this.props.fallback : this.props.children
+  }
+}
+
+/** Calls onReady once on mount (the block avatar is ready immediately). */
+function ReadyBlockAvatar({ onReady, motionRef }) {
+  useEffect(() => {
+    onReady?.()
+  }, [onReady])
+  return <BlockAvatar motionRef={motionRef} height={PLAYER_HEIGHT} />
+}
+
+/**
+ * Kinematic character controller — no physics engine.
+ *
+ * The lobby is flat apart from a few low platforms, so movement is: camera-relative
+ * velocity, circle push-out against obstacles, a ground-height lookup with auto
+ * step-up, and gravity for jumps. Everything is written to refs/runtime, never state.
+ */
+export function Player({ onAvatarReady }) {
+  const settled = useUi((s) => s.settled)
+  const groupRef = useRef(null)
+  const visualRef = useRef(null)
+  const keys = useKeyboard()
+  const velY = useRef(0)
+  const yaw = useRef(Math.PI)
+  /** Stride phase for footstep sounds, and whether we were airborne last frame. */
+  const stride = useRef(0)
+  const wasAir = useRef(false)
+  const fallSpeed = useRef(0)
+  const motionRef = useRef({
+    time: 0, speed: 0, grounded: true, maxSpeed: MOVE_SPEED, action: 'idle', actionTime: 0, tossTime: 9, vy: 0, sprint: 0,
+  })
+
+  useFrame((state, rawDelta) => {
+    const group = groupRef.current
+    if (!group) return
+    const delta = Math.min(rawDelta, 0.05)
     const k = keys.current
+    const pos = runtime.playerPos
+    const walking = runtime.mode === 'walk'
 
-    // Evaluated once per frame now: both the jump gate and the avatar's pose need it.
-    const grounded = isGrounded()
+    // --- Input (keyboard + touch joystick), camera-relative ------------------------
+    let ix = 0
+    let iz = 0
+    if (walking) {
+      ix = (k.right ? 1 : 0) - (k.left ? 1 : 0) + runtime.joystick.x
+      iz = (k.backward ? 1 : 0) - (k.forward ? 1 : 0) + runtime.joystick.y
+    }
+    const len = Math.hypot(ix, iz)
+    if (len > 1) {
+      ix /= len
+      iz /= len
+    }
 
-    // --- Horizontal movement, relative to camera yaw -----------------------------
-    _input.set(
-      (k.right ? 1 : 0) - (k.left ? 1 : 0),
-      0,
-      (k.backward ? 1 : 0) - (k.forward ? 1 : 0),
-    )
-
-    const linvel = body.linvel()
-
-    if (_input.lengthSq() > 0) {
-      _input.normalize()
-
-      // Flatten the camera's forward onto the ground plane so W always means
-      // "away from the camera", the standard 3rd-person runner feel.
+    let speed = 0
+    if (len > 0.05) {
       state.camera.getWorldDirection(_camForward)
       _camForward.y = 0
       _camForward.normalize()
+      _camRight.set(-_camForward.z, 0, _camForward.x)
+      _move.set(0, 0, 0).addScaledVector(_camForward, -iz).addScaledVector(_camRight, ix)
+      const moveLen = _move.length()
+      if (moveLen > 0) _move.divideScalar(moveLen)
+      speed = MOVE_SPEED * runtime.walkMult * (k.sprint ? SPRINT_MULTIPLIER : 1) * Math.min(1, len)
 
-      // Screen-right, derived from that flattened forward.
-      _camRight.crossVectors(_camForward, _up).normalize()
-
-      // Build the move vector from the camera basis directly rather than rotating
-      // the raw input by a yaw angle - the yaw form silently mirrored both axes,
-      // sending W toward the camera and A to the right.
-      // input.z is -1 for W (forward), input.x is +1 for D (right).
-      _move
-        .set(0, 0, 0)
-        .addScaledVector(_camForward, -_input.z)
-        .addScaledVector(_camRight, _input.x)
-        .normalize()
-
-      const speed = MOVE_SPEED * (k.sprint ? SPRINT_MULTIPLIER : 1)
-
-      // Set velocity directly rather than accumulating impulses: gives crisp,
-      // predictable runner control and no drift. Y is left to gravity.
-      body.setLinvel({ x: _move.x * speed, y: linvel.y, z: _move.z * speed }, true)
-
-      // Face the direction of travel.
-      if (visualRef.current) {
-        _targetQuat.setFromAxisAngle(_up, Math.atan2(_move.x, _move.z))
-        visualRef.current.quaternion.slerp(_targetQuat, 1 - Math.pow(0.001, delta))
+      const nx = pos.x + _move.x * speed * delta
+      const nz = pos.z + _move.z * speed * delta
+      // Refuse to walk into anything taller than a step.
+      if (groundHeightAt(nx, nz) - pos.y <= STEP_HEIGHT) {
+        pos.x = nx
+        pos.z = nz
       }
-    } else {
-      // Damp horizontal motion to a stop; don't touch the fall speed.
-      body.setLinvel({ x: linvel.x * 0.8, y: linvel.y, z: linvel.z * 0.8 }, true)
+      yaw.current = Math.atan2(_move.x, _move.z)
     }
 
-    // --- Jump --------------------------------------------------------------------
-    if (k.jump && jumpCooldown.current === 0 && grounded) {
-      body.applyImpulse({ x: 0, y: JUMP_IMPULSE, z: 0 }, true)
-      jumpCooldown.current = JUMP_COOLDOWN_S
+    // --- Collisions -------------------------------------------------------------------
+    for (let i = 0; i < OBSTACLES.length; i += 1) {
+      const o = OBSTACLES[i]
+      const dx = pos.x - o[0]
+      const dz = pos.z - o[1]
+      const min = o[2] + PLAYER_RADIUS
+      const d2 = dx * dx + dz * dz
+      if (d2 < min * min && d2 > 1e-8) {
+        const d = Math.sqrt(d2)
+        pos.x = o[0] + (dx / d) * min
+        pos.z = o[1] + (dz / d) * min
+      }
+    }
+    // Not into the sunken training pits.
+    pushOutOfBlocked(pos, PLAYER_RADIUS)
+    pos.x = Math.min(BOUNDS.maxX, Math.max(BOUNDS.minX, pos.x))
+    pos.z = Math.min(BOUNDS.maxZ, Math.max(BOUNDS.minZ, pos.z))
+
+    // --- Vertical ---------------------------------------------------------------------
+    const ground = groundHeightAt(pos.x, pos.z)
+    const onGround = pos.y <= ground + 0.02 && velY.current <= 0
+    if (onGround && walking && (k.jump || runtime.jumpQueued)) {
+      velY.current = JUMP_VELOCITY
+      sfx.jump()
+    }
+    runtime.jumpQueued = false
+    velY.current += GRAVITY * delta
+    pos.y += velY.current * delta
+    if (pos.y <= ground) {
+      pos.y = ground
+      velY.current = 0
+    }
+    const grounded = pos.y <= ground + 0.02
+    if (!grounded) fallSpeed.current = Math.min(fallSpeed.current, velY.current)
+    // Landing thud (only for a real fall, not stepping onto a plate).
+    if (grounded && wasAir.current && fallSpeed.current < -6) sfx.land()
+    if (grounded) fallSpeed.current = 0
+    wasAir.current = !grounded
+    // Footsteps, two per stride, a little crisper on plates and platforms.
+    if (grounded && speed > 0.5) {
+      const before = Math.floor(stride.current / Math.PI)
+      stride.current += delta * (5 + Math.min(1, speed / MOVE_SPEED) * 5)
+      if (Math.floor(stride.current / Math.PI) !== before) sfx.step(ground > 0)
+    }
+    runtime.cheer = Math.max(0, runtime.cheer - delta)
+
+    // Training: on an unlocked pit's start plate, standing (or nearly) still.
+    const pad = walking ? padAt(pos.x, pos.z) : -1
+    const training = pad >= 0 && isPadUnlocked(getGame().profile, pad) && speed < 0.5
+    runtime.trainingPad = training ? pad : -1
+    if (walking) runtime.action = training ? 'train' : 'idle'
+
+    // Face the pit while training, and down the stairs while throwing.
+    if (training) yaw.current = -Math.PI / 2
+    if (runtime.mode === 'throw') yaw.current = Math.PI
+    runtime.playerYaw = yaw.current
+    // When this position was true: position reports are stamped with it (connection.js),
+    // not with the moment the report timer fires, which is up to a frame later.
+    runtime.playerPosAt = performance.now()
+
+    group.position.copy(pos)
+    if (visualRef.current) {
+      const r = visualRef.current.rotation
+      r.y += angleDelta(r.y, yaw.current) * (1 - Math.pow(0.0005, delta))
     }
 
-    // --- Publish motion state for the avatar's pose -------------------------------
-    const nowVel = body.linvel()
-    const motion = motionRef.current
-    motion.time += delta
-    motion.speed = Math.hypot(nowVel.x, nowVel.z)
-    motion.grounded = grounded
-    motion.maxSpeed = MOVE_SPEED * (k.sprint ? SPRINT_MULTIPLIER : 1)
+    runtime.playerSpeed = speed
+    runtime.grounded = grounded
+    runtime.nearby = nearbyAt(pos.x, pos.z, runtime.world)
+    // What everyone else sees us doing (connection.js reports it with our position).
+    const sprinting = walking && k.sprint && speed > 0.5
+    runtime.netAnim =
+      runtime.mode === 'throw'
+        ? 'throw'
+        : !grounded
+          ? 'jump'
+          : training
+            ? 'train'
+            : runtime.cheer > 0
+              ? 'cheer'
+              : speed > 0.5
+                ? sprinting
+                  ? 'run'
+                  : 'walk'
+                : 'idle'
+
+    // --- Pose ---------------------------------------------------------------------------
+    const m = motionRef.current
+    m.time += delta
+    m.speed = speed
+    m.grounded = grounded
+    m.maxSpeed = MOVE_SPEED * runtime.walkMult * (k.sprint ? SPRINT_MULTIPLIER : 1)
+    m.action = runtime.action
+    m.actionTime = runtime.actionTime
+    m.tossTime = runtime.tossTime
+    m.vy = velY.current
+    m.cheer = runtime.cheer
+    m.sprint = sprinting ? 1 : 0
   })
 
   return (
-    <RigidBody
-      ref={bodyRef}
-      position={position}
-      colliders={false}
-      mass={1}
-      // Locking rotation keeps the capsule upright; facing is handled on the mesh.
-      enabledRotations={[false, false, false]}
-      friction={0.2}
-      linearDamping={0.1}
-      ccd
-      name="player"
-    >
-      <CapsuleCollider args={[CAPSULE_HALF_HEIGHT, CAPSULE_RADIUS]} />
-      {/* Avatar origin is at the feet; the capsule origin is at its centre. */}
-      <group ref={visualRef} position={[0, -PLAYER_HEIGHT / 2, 0]}>
-        <PlayerAvatar
-          onReady={onAvatarReady}
-          targetHeight={PLAYER_HEIGHT}
-          motionRef={motionRef}
-        />
+    <group ref={groupRef} position={runtime.playerPos.toArray()}>
+      <group ref={visualRef} rotation={[0, Math.PI, 0]}>
+        <AvatarBoundary fallback={<ReadyBlockAvatar onReady={onAvatarReady} motionRef={motionRef} />}>
+          <Suspense fallback={<BlockAvatar motionRef={motionRef} height={PLAYER_HEIGHT} />}>
+            <PlayerAvatar onReady={onAvatarReady} targetHeight={PLAYER_HEIGHT} motionRef={motionRef} />
+          </Suspense>
+        </AvatarBoundary>
+        {settled && <BackBottle />}
       </group>
-    </RigidBody>
+    </group>
   )
 }
 
-export { PLAYER_HEIGHT }
 export default Player

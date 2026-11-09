@@ -1,0 +1,7 @@
+{
+  "name": "shared",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Bottle Tumble rules and lobby layout, shared by client and server. Plain ESM, no dependencies.",
+  "type": "module"
+}

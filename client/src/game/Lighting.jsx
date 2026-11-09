@@ -1,68 +1,113 @@
 import { useFrame, useThree } from '@react-three/fiber'
 import { useLayoutEffect, useRef } from 'react'
-import { Vector3 } from 'three'
+import { Color, Vector3 } from 'three'
 
+import { useGame } from '../store/game'
+import { runtime } from './runtime'
 import { LIGHTS } from './sceneStyle'
+import { PRESETS, useQuality } from './stores/quality'
 
-const SUN_DIRECTION = new Vector3(...LIGHTS.sunDirection).normalize()
-/** How far back along SUN_DIRECTION the light sits from the point it shadows. */
 const SUN_DISTANCE = 60
-/** Half-size of the square area around the player that receives shadows. */
-const SHADOW_EXTENT = 24
+const SHADOW_EXTENT = 22
 
 /**
- * Bright, even daylight: a white hemisphere fill and a warm sun with soft shadows.
- *
- * A directional light's shadow only covers a fixed box around its target, so the sun
- * and its target are moved with the player every frame. Otherwise shadows would exist
- * only near the world origin and disappear a few steps down the track.
- *
- * @param {{ followRef: React.MutableRefObject<any> }} props the player's rigid body
+ * Each world's light. World 1 is a clear sunny day: a cool sky fill and a warm sun, so
+ * lit and shaded faces differ in temperature as well as brightness. World 2 (Candy
+ * Peaks) is a candy dusk: pink sky fill, violet bounce and a low, warm orange sun.
+ * Keep each sun direction in step with the sky glow in Sky.jsx.
  */
-export function Lighting({ followRef }) {
+const WORLD_LIGHTS = {
+  1: {
+    hemiSky: '#eef5ff', hemiGround: '#a7c48e', hemiIntensity: 2.05,
+    sunColor: '#fff0d2', sunIntensity: 1.8, sunDirection: LIGHTS.sunDirection,
+  },
+  2: {
+    hemiSky: '#ffe6f5', hemiGround: '#a27cc8', hemiIntensity: 2.0,
+    sunColor: '#ffd3a6', sunIntensity: 1.85, sunDirection: [-0.62, 0.5, 0.42],
+  },
+}
+
+// Converted once; the frame loop only lerps towards these.
+const TARGETS = Object.fromEntries(
+  Object.entries(WORLD_LIGHTS).map(([w, l]) => [
+    w,
+    {
+      hemiSky: new Color(l.hemiSky),
+      hemiGround: new Color(l.hemiGround),
+      hemiIntensity: l.hemiIntensity,
+      sunColor: new Color(l.sunColor),
+      sunIntensity: l.sunIntensity,
+      sunDirection: new Vector3(...l.sunDirection).normalize(),
+    },
+  ]),
+)
+
+const START = TARGETS[1]
+const SUN_START = START.sunDirection.clone().multiplyScalar(SUN_DISTANCE).toArray()
+const _sunDir = START.sunDirection.clone()
+
+/**
+ * Hemisphere fill + sun, in the palette of the world you're in (blended over about a
+ * second when you change worlds). The sun casts shadows only when the preset allows it
+ * (never on LOW), and follows the camera focus so the shadowed area travels with the
+ * action.
+ */
+export function Lighting() {
+  const hemiRef = useRef(null)
   const sunRef = useRef(null)
+  const snapped = useRef(false)
   const scene = useThree((s) => s.scene)
+  const preset = useQuality((s) => s.preset)
+  const world = useGame((s) => (s.profile.world === 2 ? 2 : 1))
+  const { shadows, shadowMapSize } = PRESETS[preset]
 
   useLayoutEffect(() => {
     const sun = sunRef.current
     if (!sun) return undefined
-
-    const shadowCamera = sun.shadow.camera
-    shadowCamera.left = -SHADOW_EXTENT
-    shadowCamera.right = SHADOW_EXTENT
-    shadowCamera.top = SHADOW_EXTENT
-    shadowCamera.bottom = -SHADOW_EXTENT
-    shadowCamera.near = 1
-    shadowCamera.far = SUN_DISTANCE * 2
-    shadowCamera.updateProjectionMatrix()
-
-    // The target has to be in the scene for its matrix to update as it moves.
+    const cam = sun.shadow.camera
+    cam.left = -SHADOW_EXTENT
+    cam.right = SHADOW_EXTENT
+    cam.top = SHADOW_EXTENT
+    cam.bottom = -SHADOW_EXTENT
+    cam.near = 1
+    cam.far = SUN_DISTANCE * 2
+    cam.updateProjectionMatrix()
     scene.add(sun.target)
     return () => {
       scene.remove(sun.target)
     }
   }, [scene])
 
-  useFrame(() => {
+  useFrame((_s, delta) => {
     const sun = sunRef.current
-    const body = followRef.current
-    if (!sun || !body) return
+    const hemi = hemiRef.current
+    if (!sun || !hemi) return
+    const target = TARGETS[world]
+    // First frame snaps; after that, colours drift to the new world's.
+    const k = snapped.current ? 1 - Math.pow(0.05, delta) : 1
+    snapped.current = true
+    hemi.color.lerp(target.hemiSky, k)
+    hemi.groundColor.lerp(target.hemiGround, k)
+    hemi.intensity += (target.hemiIntensity - hemi.intensity) * k
+    sun.color.lerp(target.sunColor, k)
+    sun.intensity += (target.sunIntensity - sun.intensity) * k
+    _sunDir.lerp(target.sunDirection, k).normalize()
 
-    const p = body.translation()
-    sun.target.position.set(p.x, 0, p.z)
-    sun.position.copy(sun.target.position).addScaledVector(SUN_DIRECTION, SUN_DISTANCE)
+    const f = runtime.focus
+    sun.target.position.set(f.x, f.y, f.z)
+    sun.position.copy(sun.target.position).addScaledVector(_sunDir, SUN_DISTANCE)
   })
 
   return (
     <>
-      <hemisphereLight args={[LIGHTS.hemiSky, LIGHTS.hemiGround, LIGHTS.hemiIntensity]} />
+      <hemisphereLight ref={hemiRef} args={[START.hemiSky, START.hemiGround, START.hemiIntensity]} />
       <directionalLight
         ref={sunRef}
-        castShadow
-        color={LIGHTS.sunColor}
-        intensity={LIGHTS.sunIntensity}
-        position={SUN_DIRECTION.clone().multiplyScalar(SUN_DISTANCE).toArray()}
-        shadow-mapSize={[2048, 2048]}
+        castShadow={shadows}
+        color={START.sunColor}
+        intensity={START.sunIntensity}
+        position={SUN_START}
+        shadow-mapSize={[shadowMapSize || 512, shadowMapSize || 512]}
         shadow-radius={LIGHTS.shadowSoftness}
         shadow-intensity={LIGHTS.shadowIntensity}
         shadow-bias={-0.0005}
