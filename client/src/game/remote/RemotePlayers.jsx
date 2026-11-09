@@ -167,6 +167,8 @@ export function RemotePlayers() {
     const now = performance.now()
     const t = state.clock.elapsedTime
     const gelAllowed = preset.particles
+    // LOW: the low-end preset (no particles there either).
+    const lowEnd = !preset.particles
 
     // --- Where everyone is, and who is drawn ----------------------------------------
     let shown = 0
@@ -219,10 +221,12 @@ export function RemotePlayers() {
         const group = useOwn ? view.group : view.holdGroup
         group.position.copy(r.position)
         group.rotation.y = r.yaw
-        // Far players without accessories are posed every other frame (alternating, so
-        // the cost spreads); everyone still moves and turns every frame.
+        // Players without accessories (the far ones; on LOW, all but the nearest two) are
+        // posed every other frame, alternating so the cost spreads; everyone still moves
+        // and turns every frame.
         r.poseDelta = (r.poseDelta || 0) + delta
-        const pose = r.detailed || r.camDist < FULL_RATE_DISTANCE || ((frame + index) & 1) === 0 || view.backRig !== poser.rig
+        const fullRate = r.detailed || (!lowEnd && r.camDist < FULL_RATE_DISTANCE)
+        const pose = fullRate || ((frame + index) & 1) === 0 || view.backRig !== poser.rig
         try {
           if (pose) {
             // Rest pose (with proportions), then the motion's pose and emote on top.
@@ -233,6 +237,15 @@ export function RemotePlayers() {
           }
           poser.setDetail(r.detailed)
           if (view.backBone) back = backMatrix(view, _base)
+          // Their hand, for a bottle that leaves it (throw, training toss).
+          if (m.action !== 'idle') {
+            const hand = poser.rig.bones.ArmR2_leaf?.bone
+            if (hand) {
+              hand.updateWorldMatrix(true, false)
+              r.hand.setFromMatrixPosition(hand.matrixWorld)
+              r.handOk = true
+            }
+          }
         } catch {
           // A malformed outfit must not stop everyone else being drawn.
         }

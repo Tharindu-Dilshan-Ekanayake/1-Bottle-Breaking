@@ -25,6 +25,8 @@ import RemotePlayers from './remote/RemotePlayers'
 
 /** How long the loading screen waits for the remote avatar after the lobby is drawn. */
 const AVATAR_GRACE_MS = 900
+/** Longest the loading screen waits for the server before opening the game anyway. */
+const NET_WAIT_MS = 75000
 /** How long after the loading screen lifts the decorative extras mount. */
 const SETTLE_MS = 700
 
@@ -159,8 +161,20 @@ export function GameScene() {
   const avatarReady = useRef(false)
   const graceTimer = useRef(null)
   const settleTimer = useRef(null)
+  /**
+   * The game opens only once the server side is settled too: connected and the player's
+   * save received - or, with no server to reach, playing offline. (Failsafe: after
+   * NET_WAIT_MS the game opens anyway, so a stuck connection can never hang the screen.)
+   */
+  const netReady = useGame((s) => s.profileLoaded && (s.net.mode === 'online' || s.net.mode === 'offline' || s.net.mode === 'replaced'))
+  const netReadyRef = useRef(false)
+  const waitingForNet = useRef(false)
   const finishLoading = useCallback(() => {
     if (loadingEnded.current) return
+    if (!netReadyRef.current) {
+      waitingForNet.current = true
+      return
+    }
     loadingEnded.current = true
     clearTimeout(graceTimer.current)
     useUi.setState({ loaded: true })
@@ -169,6 +183,25 @@ export function GameScene() {
     // after the loading screen has faded, not while the player waits on it.
     settleTimer.current = setTimeout(() => useUi.setState({ settled: true }), SETTLE_MS)
   }, [game])
+
+  useEffect(() => {
+    netReadyRef.current = netReady
+    if (netReady && waitingForNet.current) {
+      waitingForNet.current = false
+      finishLoading()
+    }
+  }, [netReady, finishLoading])
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      netReadyRef.current = true
+      if (waitingForNet.current) {
+        waitingForNet.current = false
+        finishLoading()
+      }
+    }, NET_WAIT_MS)
+    return () => clearTimeout(t)
+  }, [finishLoading])
 
   const handleAvatarReady = useCallback(() => {
     performance.mark('bt:avatar-ready')

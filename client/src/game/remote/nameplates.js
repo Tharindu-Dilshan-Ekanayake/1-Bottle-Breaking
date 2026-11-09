@@ -12,7 +12,7 @@ export const NAMEPLATE_POOL_SIZE = 7
 export const LOCAL_SLOT = NAMEPLATE_POOL_SIZE
 export const NAMEPLATE_NODES = NAMEPLATE_POOL_SIZE + 1
 
-const slots = Array.from({ length: NAMEPLATE_NODES }, () => ({ el: null, name: null, bubble: null, text: '', said: '' }))
+const slots = Array.from({ length: NAMEPLATE_NODES }, () => ({ el: null, name: null, bubble: null, text: '', said: '', x: NaN, y: NaN, opacity: '' }))
 
 /** Called once by the Nameplates component with its pre-rendered nodes. */
 export function registerNameplateNodes(nodes) {
@@ -22,6 +22,10 @@ export function registerNameplateNodes(nodes) {
     slot.el = el
     slot.bubble = el.querySelector('.chat-bubble')
     slot.name = el.querySelector('.nameplate-name')
+    // A fresh node: nothing cached about it yet.
+    slot.x = NaN
+    slot.y = NaN
+    slot.opacity = ''
   })
 }
 
@@ -33,7 +37,10 @@ export function placeNameplate(index, text, x, y, opacity = 1, bubble = null) {
   const slot = slots[index]
   if (!slot?.el) return
   if (x === null) {
-    if (slot.el.style.opacity !== '0') slot.el.style.opacity = '0'
+    if (slot.opacity !== '0') {
+      slot.opacity = '0'
+      slot.el.style.opacity = '0'
+    }
     return
   }
   if (slot.text !== text) {
@@ -49,8 +56,18 @@ export function placeNameplate(index, text, x, y, opacity = 1, bubble = null) {
     slot.bubble.textContent = said
     slot.bubble.style.display = said ? '' : 'none'
   }
-  slot.el.style.opacity = opacity.toFixed(2)
-  slot.el.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) translate(-50%, -100%)`
+  // Only touch the DOM when something visibly changed (a still tag costs nothing).
+  const o = opacity.toFixed(2)
+  if (slot.opacity !== o) {
+    slot.opacity = o
+    slot.el.style.opacity = o
+  }
+  // (Written as "not close", so a fresh slot's NaN position always counts as moved.)
+  if (!(Math.abs(x - slot.x) < 0.25 && Math.abs(y - slot.y) < 0.25)) {
+    slot.x = x
+    slot.y = y
+    slot.el.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) translate(-50%, -100%)`
+  }
 }
 
 export function hideNameplatesFrom(index) {

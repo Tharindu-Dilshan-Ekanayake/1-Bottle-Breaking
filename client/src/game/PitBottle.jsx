@@ -72,6 +72,14 @@ export function PitBottle() {
 
   const handPosition = () => {
     const p = runtime.playerPos
+    const h = runtime.handPos
+    // The real hand, when the avatar has posed it near the player; else a guess from the facing.
+    if (Math.abs(h.x - p.x) + Math.abs(h.z - p.z) < 3 && h.y > p.y) {
+      s.fromX = h.x
+      s.fromY = h.y
+      s.fromZ = h.z
+      return
+    }
     const fxDir = Math.sin(runtime.playerYaw)
     const fzDir = Math.cos(runtime.playerYaw)
     // The right hand, at the character's size.

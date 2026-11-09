@@ -36,8 +36,12 @@ export const runtime = {
   cheer: 0,
   /** Seconds since the last training toss (for the toss swing). */
   tossTime: 9,
-  /** What other players are told we're doing: 'idle' | 'walk' | 'jump' | 'train' | 'throw'. */
+  /** What other players are told we're doing: 'idle' | 'walk' | 'jump' | 'run' | 'train' | 'throw' | 'cheer'. */
   netAnim: 'idle',
+  /** Where our right hand is in the world this frame (PlayerAvatar): a bottle in hand starts here. */
+  handPos: new Vector3(),
+  /** performance.now() when playerPos was last updated (Player): the clock behind our position reports. */
+  playerPosAt: 0,
 
   // --- Input written by the touch UI ------------------------------------------------
   joystick: { x: 0, y: 0 },

@@ -64,6 +64,8 @@ function newPlayer(sessionId, state) {
     anim: 'idle',
     // Allocated once per player, when they join - never per frame.
     position: new Vector3(state.x || 0, state.y || 0, state.z || 0),
+    /** Their right hand in the world while they throw or train (game/remote). */
+    hand: new Vector3(state.x || 0, (state.y || 0) + 1.3, state.z || 0),
     /** Facing from the snapshots, and the eased facing the body is drawn with. */
     netYaw: state.rotY || 0,
     yaw: state.rotY || 0,
@@ -93,8 +95,11 @@ function newPlayer(sessionId, state) {
     /** Motion the avatar is posed from (avatarRig.animateRig), updated by the renderer. */
     motion: {
       time: 0, speed: 0, grounded: true, maxSpeed: 6, action: 'idle', actionTime: 0, tossTime: 9, vy: 0,
-      cheer: 0, sprint: 0, emote: null, emoteSeq: 0,
+      cheer: 0, sprint: 0, emote: null, emoteSeq: 0, repTime: 9, trainHops: 6, interval: 0.6,
     },
+    /** When their last rep arrived, and their rep interval as seen (Quick Reps varies it). */
+    lastRepAt: 0,
+    repGap: 0,
     /** Their bottle's trip down a training pit (game/remote). */
     pit: {
       pad: -1, step: -1, hopping: false, t: 0, dur: 0, arc: 0, roll: 0, rest: 0, squash: 0,
@@ -210,7 +215,13 @@ export function upsertRemotePlayer(sessionId, state) {
 
   // Training reps: each one is a bounce of their bottle down the pit.
   const reps = Number.isInteger(state.reps) ? state.reps : 0
-  if (r.reps >= 0 && reps !== r.reps) r.pendingReps = Math.min(MAX_PENDING_REPS, r.pendingReps + ((reps - r.reps) & 0xff))
+  if (r.reps >= 0 && reps !== r.reps) {
+    const count = (reps - r.reps) & 0xff
+    r.pendingReps = Math.min(MAX_PENDING_REPS, r.pendingReps + count)
+    const gap = (now - r.lastRepAt) / count
+    if (gap > 150 && gap < 1500) r.repGap = r.repGap ? r.repGap * 0.7 + gap * 0.3 : gap
+    r.lastRepAt = now
+  }
   r.reps = reps
 
   // Position: a new report (a new stamp) goes on the timeline at its sample time. A

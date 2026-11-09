@@ -37,6 +37,14 @@ import {
   updateEmote,
 } from './avatarRig'
 import { PLAYER_HEIGHT } from './playerSize'
+import { runtime } from './runtime'
+
+/**
+ * Where your right hand is in the world, every frame (runtime.handPos): a bottle in
+ * your hand - the throw's wind-up, a training toss - can start from it, so it leaves
+ * the hand exactly where the animation releases it.
+ */
+const HAND_BONE = 'ArmR2_leaf'
 
 /**
  * Keeps the avatar breathing when it is rendered outside the game (a menu preview,
@@ -317,6 +325,13 @@ export const BloxityAvatar = forwardRef(function BloxityAvatar(
       const emote = emoteSource ? emoteSource() : motion
       updateEmote(rig, emotePlayer, emote?.emote, Math.min(delta, 0.1), getEmoteClip, emote?.emoteSeq ?? 0)
       placeFollowers(rig)
+      if (local) {
+        const hand = rig.bones[HAND_BONE]?.bone
+        if (hand) {
+          hand.updateWorldMatrix(true, false)
+          runtime.handPos.setFromMatrixPosition(hand.matrixWorld)
+        }
+      }
     } catch {
       // A malformed payload must not kill the render loop.
     }

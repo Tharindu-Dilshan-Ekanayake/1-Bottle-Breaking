@@ -2,7 +2,7 @@ import { useFrame } from '@react-three/fiber'
 import { Component, Suspense, useEffect, useRef } from 'react'
 import { Vector3 } from 'three'
 
-import { isPadUnlocked } from '@shared/logic'
+import { isPadUnlocked, trainInterval } from '@shared/logic'
 import { groundHeightAt, nearbyAt, OBSTACLES, padAt, pushOutOfBlocked } from '@shared/world'
 
 import { getGame } from '../store/game'
@@ -87,7 +87,10 @@ export function Player({ onAvatarReady }) {
   const fallSpeed = useRef(0)
   const motionRef = useRef({
     time: 0, speed: 0, grounded: true, maxSpeed: MOVE_SPEED, action: 'idle', actionTime: 0, tossTime: 9, vy: 0, sprint: 0,
+    repTime: 9, trainHops: 6, interval: 0.6,
   })
+  /** Training rhythm for the pose: reps seen, time since the last, hops since a toss. */
+  const trainRef = useRef({ active: false, trains: 0, repTime: 9, hops: 6, toss: 9 })
 
   useFrame((state, rawDelta) => {
     const group = groupRef.current
@@ -229,6 +232,32 @@ export function Player({ onAvatarReady }) {
     m.vy = velY.current
     m.cheer = runtime.cheer
     m.sprint = sprinting ? 1 : 0
+    // Training rhythm: every rep (the server's count) is a bounce down the pit; a fresh
+    // bottle is tossed every few (runtime.tossTime restarts). The pose times its
+    // crouch, bob and next wind-up from these.
+    const profile = getGame().profile
+    const trains = profile.stats?.trains ?? 0
+    const tr = trainRef.current
+    if (training) {
+      if (!tr.active) {
+        tr.active = true
+        tr.repTime = 0
+        tr.hops = 6
+        tr.trains = trains
+      }
+      tr.repTime += delta
+      if (runtime.tossTime < tr.toss) tr.hops = 0
+      if (trains !== tr.trains) {
+        tr.trains = trains
+        tr.repTime = 0
+        // The rep that tossed the fresh bottle isn't a hop.
+        if (runtime.tossTime >= 0.15) tr.hops += 1
+      }
+    } else tr.active = false
+    tr.toss = runtime.tossTime
+    m.repTime = tr.repTime
+    m.trainHops = tr.hops
+    m.interval = trainInterval(profile)
   })
 
   return (

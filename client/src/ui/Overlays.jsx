@@ -6,6 +6,7 @@ import { mult } from '@shared/format'
 
 import { sfx } from '../game/audio'
 import { useUi } from '../game/stores/ui'
+import { useGame } from '../store/game'
 import { GRADIENTS, u } from './hud/style'
 import Icon from './Icon'
 import { BottleIcon, PetFace } from './icons'
@@ -150,6 +151,9 @@ export function LoadingScreen() {
   const loaded = useUi((s) => s.loaded)
   const { progress, active } = useProgress()
   const [gone, setGone] = useState(false)
+  const netMode = useGame((s) => s.net.mode)
+  const netMessage = useGame((s) => s.net.message)
+  const profileLoaded = useGame((s) => s.profileLoaded)
 
   useEffect(() => {
     if (!loaded) return undefined
@@ -158,7 +162,13 @@ export function LoadingScreen() {
   }, [loaded])
 
   if (gone) return null
-  const pctDone = loaded ? 100 : active ? Math.max(8, Math.round(progress)) : 60
+  // Never 100% until the game really opens: it also waits on the server.
+  const pctDone = loaded ? 100 : Math.min(96, active ? Math.max(8, Math.round(progress)) : 60)
+  const status = loaded
+    ? 'Ready!'
+    : netMode === 'connecting' || !profileLoaded
+      ? netMessage || 'Connecting to the server…'
+      : 'Building the lobby…'
   return (
     <div
       className={`pp-font absolute inset-0 z-50 grid place-items-center transition-opacity duration-500 ${loaded ? 'pointer-events-none opacity-0' : 'opacity-100'}`}
@@ -168,12 +178,12 @@ export function LoadingScreen() {
         <div className="pp-bounce">
           <BottleIcon size={u(220)} fill="#ff6fb5" glass="#f5f0ff" cap="#ffd23f" />
         </div>
-        <span style={{ fontSize: u(130), marginTop: u(10) }}>
+        <span style={{ fontSize: `min(${u(130)}, 10.5vw)`, marginTop: u(10), maxWidth: '100%' }}>
           <StrokeText stroke={u(22)} gradient={GRADIENTS.gold}>
-            Bottle Tumble
+            Bottle Breaking
           </StrokeText>
         </span>
-        <span style={{ fontSize: u(44) }}>
+        <span style={{ fontSize: `min(${u(44)}, 5vw)` }}>
           <StrokeText stroke={u(9)}>Toss it. Tumble it. Smash it.</StrokeText>
         </span>
         <div
@@ -185,6 +195,9 @@ export function LoadingScreen() {
         </div>
         <span style={{ fontSize: u(34), marginTop: u(10) }}>
           <StrokeText stroke={u(7)}>Loading… {pctDone}%</StrokeText>
+        </span>
+        <span style={{ fontSize: u(28), marginTop: u(4) }}>
+          <StrokeText stroke={u(6)} fill="#e2e8f0">{status}</StrokeText>
         </span>
       </div>
     </div>
